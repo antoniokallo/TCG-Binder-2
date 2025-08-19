@@ -1,4 +1,5 @@
 import Foundation
+import Supabase
 
 // MARK: - API Models
 struct OnePieceCard: Codable, Identifiable {
@@ -45,14 +46,22 @@ struct OnePieceCard: Codable, Identifiable {
         case trigger
     }
     
-    // Identifiable requirement - use unique combination to handle parallel arts
+    // Identifiable requirement - use unique combination to handle parallel arts and different rarities
     var id: String { 
         if let setId = cardSetId, let imageId = cardImageId {
-            return "\(setId)-\(imageId)"  // This will be unique for parallel arts
+            // Include rarity to ensure uniqueness for same card with different rarities
+            let rarityPart = rarity != nil ? "-\(rarity!)" : ""
+            return "\(setId)-\(imageId)\(rarityPart)"
         } else if let setId = cardSetId {
-            return setId
+            // Include rarity and name to ensure uniqueness
+            let rarityPart = rarity != nil ? "-\(rarity!)" : ""
+            let namePart = "-\(cardName.replacingOccurrences(of: " ", with: "_"))"
+            return "\(setId)\(rarityPart)\(namePart)"
         } else {
-            return UUID().uuidString
+            // Fallback with name and rarity
+            let rarityPart = rarity != nil ? "-\(rarity!)" : ""
+            let namePart = cardName.replacingOccurrences(of: " ", with: "_")
+            return "\(namePart)\(rarityPart)-\(UUID().uuidString)"
         }
     }
     
@@ -68,6 +77,67 @@ struct OnePieceCard: Codable, Identifiable {
     var image: String? { cardImage }
 }
 
+// MARK: - Supabase Response Model
+struct OnePieceCardResponse: Codable {
+    let id: String
+    let name: String
+    let rarity: String?
+    let card_cost: FlexibleStringInt?  // Can be string or int
+    let card_power: FlexibleStringInt?  // Can be string or int
+    let counter_amount: Int?
+    let card_color: String?
+    let card_type: String?
+    let card_text: String?
+    let set_id: String?
+    let card_set_id: String?
+    let image_url: String?
+    let attribute: String?
+    let inventory_price: Double?
+    let market_price: Double?
+    let set_name: String?
+    let sub_types: String?
+    let life: Int?  // Changed from String? to Int?
+    let date_scraped: String?
+    let card_image_id: String?
+    let trigger: String?
+}
+
+// Helper type to handle fields that might be stored as strings or integers
+enum FlexibleStringInt: Codable {
+    case string(String)
+    case int(Int)
+    
+    init(from decoder: Decoder) throws {
+        let container = try decoder.singleValueContainer()
+        if let stringValue = try? container.decode(String.self) {
+            self = .string(stringValue)
+        } else if let intValue = try? container.decode(Int.self) {
+            self = .int(intValue)
+        } else {
+            throw DecodingError.typeMismatch(FlexibleStringInt.self, DecodingError.Context(codingPath: decoder.codingPath, debugDescription: "Expected String or Int"))
+        }
+    }
+    
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.singleValueContainer()
+        switch self {
+        case .string(let string):
+            try container.encode(string)
+        case .int(let int):
+            try container.encode(int)
+        }
+    }
+    
+    var stringValue: String? {
+        switch self {
+        case .string(let string):
+            return string
+        case .int(let int):
+            return String(int)
+        }
+    }
+}
+
 struct OnePieceSet: Codable, Identifiable {
     let id: String
     let name: String
@@ -78,36 +148,6 @@ struct OnePieceSet: Codable, Identifiable {
     }
 }
 
-// MARK: - Search Progress Tracking
-struct SearchProgress {
-    var currentSetIndex = 0
-    var setsToSearch: [String] = []
-    
-    mutating func reset() {
-        currentSetIndex = 0
-        setsToSearch = []
-    }
-    
-    mutating func setupSets(setId: String?) {
-        // Search in descending order (newest sets first), only 2 sets at a time
-        if let setId = setId {
-            setsToSearch = [setId]
-        } else {
-            setsToSearch = ["OP-11", "OP-10"]  // Start with newest 2 sets - using correct API format
-        }
-    }
-    
-    mutating func loadNextTwoSets() {
-        // Add the next 2 sets when loading more - using correct API format
-        let allSetsDescending = ["OP-11", "OP-10", "OP-09", "OP-08", "OP-07", "OP-06", "OP-05", "OP-04", "OP-03", "OP-02", "OP-01"]
-        let currentCount = setsToSearch.count
-        
-        if currentCount < allSetsDescending.count {
-            let nextSets = Array(allSetsDescending.dropFirst(currentCount).prefix(2))
-            setsToSearch.append(contentsOf: nextSets)
-        }
-    }
-}
 
 // MARK: - API Service
 @MainActor
@@ -116,349 +156,192 @@ class OnePieceAPIService: ObservableObject, TCGAPIService {
     @Published var isLoading = false
     @Published var isLoadingMore = false
     @Published var errorMessage: String?
-    @Published var availableSets: [(id: String, name: String)] = []
     @Published var canLoadMore = false
     
-    private let baseURL = "https://optcgapi.com/api"
-    private var searchTask: Task<Void, Never>?
+    private var currentPage = 0
+    private let pageSize = 20
     private var currentQuery = ""
-    private var currentSetId: String?
-    private var searchProgress = SearchProgress()
-    private var currentSearchId = UUID()
-    private var cachedSets: [String: [OnePieceCard]] = [:]  // Cache fetched sets
-    private var consecutiveEmptyBatches = 0  // Track empty batches to prevent infinite loops
+    private var currentSetId: String? = nil
+    
+    private let availableSets: [(id: String, name: String)] = [
+        ("OP-11", "A Fist of Divine Speed"),
+        ("OP-10", "Royal Blood"),
+        ("OP-09", "Emperors in the New World"),
+        ("OP-08", "Two Legends"),
+        ("OP-07", "500 Years in the Future"),
+        ("OP-06", "Wings of the Captain"),
+        ("OP-05", "Awakening of the New Era"),
+        ("OP-04", "Kingdoms of Intrigue"),
+        ("OP-03", "Pillars of Strength"),
+        ("OP-02", "Paramount War"),
+        ("OP-01", "Romance Dawn")
+    ]
     
     func getAvailableSets() -> [(id: String, name: String)] {
         return availableSets
     }
     
     func loadAllSets() async {
-        print("🔄 Loading all sets from API...")
-        do {
-            let urlString = "\(baseURL)/allSets/"
-            print("🌐 API Call: \(urlString)")
-            
-            guard let url = URL(string: urlString) else {
-                print("❌ Invalid URL: \(urlString)")
-                return
-            }
-            
-            let (data, response) = try await URLSession.shared.data(from: url)
-            
-            guard let httpResponse = response as? HTTPURLResponse else {
-                print("❌ Invalid HTTP response")
-                return
-            }
-            
-            print("📡 HTTP Status: \(httpResponse.statusCode)")
-            
-            if httpResponse.statusCode == 200 {
-                // Try to parse as array of simple objects
-                let jsonString = String(data: data, encoding: .utf8) ?? "Unable to decode"
-                print("📄 Raw response: \(jsonString)")
-                
-                // Use hardcoded sets in descending order (newest first) - only for set picker
-                availableSets = [
-                    ("OP-11", "A Fist of Divine Speed"),
-                    ("OP-10", "Royal Blood"),
-                    ("OP-09", "Emperors in the New World"),
-                    ("OP-08", "Two Legends"),
-                    ("OP-07", "500 Years in the Future"),
-                    ("OP-06", "Wings of the Captain"),
-                    ("OP-05", "Awakening of the New Era"),
-                    ("OP-04", "Kingdoms of Intrigue"),
-                    ("OP-03", "Pillars of Strength"),
-                    ("OP-02", "Paramount War"),
-                    ("OP-01", "Romance Dawn")
-                ]
-                print("✅ Using predefined sets: \(availableSets.count) sets")
-            } else {
-                print("❌ HTTP Error: \(httpResponse.statusCode)")
-                print("📄 Response: \(String(data: data, encoding: .utf8) ?? "Unable to decode")")
-            }
-        } catch {
-            print("❌ Error loading sets: \(error)")
-        }
+        // Sets are hardcoded for now, but could be loaded from Supabase if needed
     }
     
     func searchCards(query: String, setId: String?) {
-        // Cancel previous search task
-        searchTask?.cancel()
-        
-        // Generate new search ID for this search session
-        let searchId = UUID()
-        currentSearchId = searchId
-        
-        // Store current search parameters
-        currentQuery = query
-        currentSetId = setId
-        
-        // Reset search progress for new search
-        searchProgress.reset()
-        searchProgress.setupSets(setId: setId)
-        consecutiveEmptyBatches = 0
-        
-        // Clear existing results for new search
-        searchResults = []
-        canLoadMore = false
-        
-        // Debounced search with delay
-        searchTask = Task { [weak self] in
-            // Wait 500ms to debounce rapid typing
-            try? await Task.sleep(nanoseconds: 500_000_000)
-            
-            // Check if this search was cancelled or superseded
-            guard !Task.isCancelled, await self?.currentSearchId == searchId else { 
-                print("🚫 Search cancelled or superseded")
-                return 
-            }
-            
-            await self?.performInitialSearch(query: query, setId: setId, searchId: searchId)
+        print("🚀 OnePiece searchCards called with query: '\(query)' setId: '\(setId ?? "nil")'")
+        Task {
+            await performSearch(query: query, setId: setId, isLoadMore: false)
         }
     }
     
     func loadMoreResults() {
-        guard !currentQuery.isEmpty && canLoadMore && !isLoadingMore else { return }
-        
-        let searchId = currentSearchId  // Capture current search ID
-        
-        Task { [weak self] in
-            await self?.setIsLoadingMore(true)
-            await self?.performLoadMoreSearch(searchId: searchId)
-            await self?.setIsLoadingMore(false)
+        print("🚀 OnePiece loadMoreResults called")
+        Task {
+            await performSearch(query: currentQuery, setId: currentSetId, isLoadMore: true)
         }
     }
     
-    private func setIsLoadingMore(_ loading: Bool) {
-        isLoadingMore = loading
-    }
-    
-    private func performInitialSearch(query: String, setId: String? = nil, searchId: UUID) async {
-        guard !query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+    private func performSearch(query: String, setId: String?, isLoadMore: Bool) async {
+        print("🔍 OnePiece performSearch called")
+        print("🔍 Query: '\(query)'")
+        print("🔍 SetId: '\(setId ?? "nil")'")
+        print("🔍 IsLoadMore: \(isLoadMore)")
+        
+        if isLoadMore {
+            isLoadingMore = true
+            print("🔍 Loading more results, current page: \(currentPage)")
+        } else {
+            isLoading = true
             searchResults = []
-            canLoadMore = false
-            return
+            currentPage = 0
+            currentQuery = query
+            currentSetId = setId
+            print("🔍 Starting new search, reset to page 0")
         }
         
-        // Check if this search is still current
-        guard currentSearchId == searchId else {
-            print("🚫 Initial search abandoned - newer search started")
-            return
-        }
-        
-        print("🔍 Initial search for: '\(query)' in set: \(setId ?? "newest sets first")")
-        
-        isLoading = true
         errorMessage = nil
         
-        // Start with just first set and limited cards to avoid rate limiting
-        await searchNextBatch(query: query, initialSearch: true, searchId: searchId)
+        do {
+            print("🔍 Starting Supabase query...")
+            // Build the query for Supabase
+            let response: [OnePieceCardResponse]
+            
+            if !query.isEmpty && setId != nil && !setId!.isEmpty {
+                print("🔍 Searching with both name and set filters")
+                print("🔍 Query: ILIKE name '%\(query)%' AND set_id = '\(setId!)'")
+                response = try await supabase
+                    .from("op_cards")
+                    .select("*")
+                    .ilike("name", value: "%\(query)%")
+                    .eq("set_id", value: setId!)
+                    .range(from: currentPage * pageSize, to: (currentPage + 1) * pageSize - 1)
+                    .execute()
+                    .value
+            } else if !query.isEmpty {
+                print("🔍 Searching by name only")
+                print("🔍 Query: ILIKE name '%\(query)%'")
+                response = try await supabase
+                    .from("op_cards")
+                    .select("*")
+                    .ilike("name", value: "%\(query)%")
+                    .range(from: currentPage * pageSize, to: (currentPage + 1) * pageSize - 1)
+                    .execute()
+                    .value
+            } else if let setId = setId, !setId.isEmpty {
+                print("🔍 Filtering by set only")
+                print("🔍 Query: set_id = '\(setId)'")
+                response = try await supabase
+                    .from("op_cards")
+                    .select("*")
+                    .eq("set_id", value: setId)
+                    .range(from: currentPage * pageSize, to: (currentPage + 1) * pageSize - 1)
+                    .execute()
+                    .value
+            } else {
+                print("🔍 Getting all cards (no filters)")
+                print("🔍 Range: \(currentPage * pageSize) to \((currentPage + 1) * pageSize - 1)")
+                response = try await supabase
+                    .from("op_cards")
+                    .select("*")
+                    .range(from: currentPage * pageSize, to: (currentPage + 1) * pageSize - 1)
+                    .execute()
+                    .value
+            }
+            
+            print("🔍 Raw Supabase response count: \(response.count)")
+            if response.isEmpty {
+                print("⚠️ No data returned from Supabase. Check if:")
+                print("   - Table 'op_cards' exists")
+                print("   - Column 'name' exists") 
+                print("   - Data exists in the table")
+                print("   - Query: '\(query)'")
+            } else {
+                print("✅ Found \(response.count) raw records")
+                for (index, card) in response.prefix(3).enumerated() {
+                    print("📝 Sample card \(index + 1): \(card.name)")
+                    print("   - ID: \(card.id)")
+                    print("   - Set ID: \(card.set_id ?? "nil")")
+                    print("   - Image URL: \(card.image_url ?? "nil")")
+                }
+            }
+            
+            // Convert to OnePieceCard format
+            print("🔄 Converting \(response.count) cards to OnePieceCard format...")
+            let newCards = response.map { onePieceCardResponse in
+                convertOnePieceCardResponseToOnePieceCard(onePieceCardResponse)
+            }
+            print("✅ Converted \(newCards.count) cards successfully")
+            
+            // Debug: Show generated IDs to ensure uniqueness
+            print("🆔 Generated IDs for cards:")
+            for (index, card) in newCards.prefix(5).enumerated() {
+                print("   \(index + 1). \(card.name) (\(card.rarity ?? "no rarity")) -> ID: \(card.id)")
+            }
+            
+            if isLoadMore {
+                searchResults.append(contentsOf: newCards)
+                print("📋 Added \(newCards.count) cards to existing \(searchResults.count - newCards.count) results")
+            } else {
+                searchResults = newCards
+                print("📋 Set search results to \(newCards.count) cards")
+            }
+            
+            currentPage += 1
+            canLoadMore = newCards.count == pageSize
+            print("📄 Updated to page \(currentPage), canLoadMore: \(canLoadMore)")
+            
+        } catch {
+            print("❌ One Piece search error: \(error)")
+            print("❌ Error details: \(error.localizedDescription)")
+            errorMessage = "Failed to search One Piece cards: \(error.localizedDescription)"
+        }
         
+        print("🏁 Search completed: \(searchResults.count) total results")
         isLoading = false
+        isLoadingMore = false
     }
     
-    private func performLoadMoreSearch(searchId: UUID) async {
-        guard !currentQuery.isEmpty else { return }
-        
-        // Check if this search is still current
-        guard currentSearchId == searchId else {
-            print("🚫 Load more search abandoned - newer search started")
-            return
-        }
-        
-        print("🔍 Loading more results for: '\(currentQuery)'")
-        await searchNextBatch(query: currentQuery, initialSearch: false, searchId: searchId)
-    }
-    
-    private func searchNextBatch(query: String, initialSearch: Bool, searchId: UUID) async {
-        var newCards: [OnePieceCard] = []
-        let maxResultsPerBatch = initialSearch ? 10 : 20  // Can be higher since we're not making individual API calls
-        let setsToProcess = initialSearch ? 1 : 2  // Process 1-2 sets per batch
-        var setsProcessed = 0
-        
-        while searchProgress.currentSetIndex < searchProgress.setsToSearch.count && 
-              newCards.count < maxResultsPerBatch && 
-              setsProcessed < setsToProcess {
-            
-            // Check if search is still current
-            guard currentSearchId == searchId else {
-                print("🚫 Search batch abandoned - newer search started")
-                return
-            }
-            
-            let setCode = searchProgress.setsToSearch[searchProgress.currentSetIndex]
-            print("🎯 Searching in set: \(setCode)")
-            
-            // Fetch entire set if not cached
-            let setCards: [OnePieceCard]
-            if let cached = cachedSets[setCode] {
-                print("📦 Using cached data for \(setCode) (\(cached.count) cards)")
-                setCards = cached
-            } else {
-                print("🌐 Fetching all cards for set: \(setCode)")
-                do {
-                    setCards = try await loadCardsFromSet(setId: setCode)
-                    cachedSets[setCode] = setCards  // Cache the results
-                    print("✅ Cached \(setCards.count) cards for \(setCode)")
-                } catch {
-                    print("❌ Failed to load set \(setCode): \(error)")
-                    searchProgress.currentSetIndex += 1
-                    setsProcessed += 1
-                    consecutiveEmptyBatches += 1
-                    continue
-                }
-                
-                // Check if search is still current after network request
-                guard currentSearchId == searchId else {
-                    print("🚫 Search abandoned during set fetch")
-                    return
-                }
-            }
-            
-            // Filter cards locally
-            let matchingCards = setCards.filter { card in
-                card.name.lowercased().contains(query.lowercased())
-            }
-            
-            if !matchingCards.isEmpty {
-                print("✅ Found \(matchingCards.count) matches in \(setCode):")
-                for card in matchingCards.prefix(maxResultsPerBatch - newCards.count) {
-                    newCards.append(card)
-                    print("  - \(card.name) (\(card.cardSetId ?? "unknown"))")
-                }
-                consecutiveEmptyBatches = 0
-            } else {
-                print("🔍 No matches in \(setCode)")
-                consecutiveEmptyBatches += 1
-            }
-            
-            searchProgress.currentSetIndex += 1
-            setsProcessed += 1
-        }
-        
-        // Add new results to existing results
-        searchResults.append(contentsOf: newCards)
-        
-        // Determine if more results are available
-        let hasMoreSetsToAdd = searchProgress.setsToSearch.count < 11  // Max 11 sets (OP01-OP11)
-        let hasMoreCardsInCurrentSets = searchProgress.currentSetIndex < searchProgress.setsToSearch.count
-        
-        // Stop if we have 3 consecutive empty sets or finished all sets
-        let shouldStop = consecutiveEmptyBatches >= 3 || (!hasMoreCardsInCurrentSets && !hasMoreSetsToAdd)
-        
-        if shouldStop {
-            canLoadMore = false
-            print("🏁 Search completed: \(searchResults.count) total results")
-        } else {
-            // If we've finished searching current sets but can add more sets, add them
-            if !hasMoreCardsInCurrentSets && hasMoreSetsToAdd {
-                print("🔄 Adding next 2 sets to search...")
-                searchProgress.loadNextTwoSets()
-                consecutiveEmptyBatches = 0  // Reset empty batch counter for new sets
-            }
-            
-            canLoadMore = searchProgress.currentSetIndex < searchProgress.setsToSearch.count
-        }
-        
-        print("✅ Batch complete: \(newCards.count) new results, \(searchResults.count) total results, can load more: \(canLoadMore)")
-    }
-    
-    private func loadCardsFromSet(setId: String) async throws -> [OnePieceCard] {
-        let urlString = "\(baseURL)/sets/\(setId)/"
-        print("🌐 API Call: \(urlString)")
-        
-        guard let url = URL(string: urlString) else {
-            print("❌ Invalid URL: \(urlString)")
-            throw APIError.invalidURL
-        }
-        
-        let (data, response) = try await URLSession.shared.data(from: url)
-        
-        guard let httpResponse = response as? HTTPURLResponse else {
-            print("❌ Invalid HTTP response")
-            throw APIError.serverError
-        }
-        
-        print("📡 HTTP Status: \(httpResponse.statusCode)")
-        
-        if httpResponse.statusCode != 200 {
-            print("❌ HTTP Error: \(httpResponse.statusCode)")
-            print("📄 Response data: \(String(data: data, encoding: .utf8) ?? "Unable to decode")")
-            throw APIError.serverError
-        }
-        
-        do {
-            let cards = try JSONDecoder().decode([OnePieceCard].self, from: data)
-            print("✅ Successfully decoded \(cards.count) cards")
-            return cards
-        } catch {
-            print("❌ JSON Decode Error: \(error)")
-            print("📄 Raw data: \(String(data: data, encoding: .utf8) ?? "Unable to decode")")
-            throw APIError.decodingError
-        }
-    }
-    
-    func getCardById(cardId: String, searchId: UUID) async -> OnePieceCard? {
-        do {
-            // Check if search is still current before making request
-            guard currentSearchId == searchId else {
-                return nil
-            }
-            
-            let urlString = "\(baseURL)/sets/card/\(cardId)/"
-            
-            guard let url = URL(string: urlString) else {
-                print("❌ Invalid URL: \(urlString)")
-                return nil
-            }
-            
-            let (data, response) = try await URLSession.shared.data(from: url)
-            
-            // Check again if search is still current after network request
-            guard currentSearchId == searchId else {
-                return nil
-            }
-            
-            guard let httpResponse = response as? HTTPURLResponse else {
-                print("❌ Invalid HTTP response for \(cardId)")
-                return nil
-            }
-            
-            if httpResponse.statusCode == 200 {
-                do {
-                    let cards = try JSONDecoder().decode([OnePieceCard].self, from: data)
-                    if let card = cards.first {
-                        return card
-                    } else {
-                        return nil
-                    }
-                } catch {
-                    print("❌ JSON Decode Error for \(cardId): \(error)")
-                    return nil
-                }
-            } else if httpResponse.statusCode == 404 {
-                // Card doesn't exist, this is normal when scanning - don't log
-                return nil
-            } else if httpResponse.statusCode == 429 {
-                // Rate limited - expected during heavy searching - don't log as error
-                return nil
-            } else {
-                print("❌ HTTP Error \(httpResponse.statusCode) for \(cardId)")
-                return nil
-            }
-            
-        } catch {
-            // Check if this is a cancellation error (expected)
-            let nsError = error as NSError
-            if nsError.domain == NSURLErrorDomain && nsError.code == NSURLErrorCancelled {
-                // Request was cancelled - this is expected, don't log as error
-                return nil
-            } else {
-                // Only log real network errors
-                print("❌ Network error for \(cardId): \(error)")
-                return nil
-            }
-        }
+    private func convertOnePieceCardResponseToOnePieceCard(_ response: OnePieceCardResponse) -> OnePieceCard {
+        return OnePieceCard(
+            cardName: response.name,
+            rarity: response.rarity,
+            cardCost: response.card_cost?.stringValue,
+            cardPower: response.card_power?.stringValue,
+            counterAmount: response.counter_amount,
+            cardColor: response.card_color,
+            cardType: response.card_type,
+            cardText: response.card_text,
+            setId: response.set_id,
+            cardSetId: response.card_set_id,
+            cardImage: response.image_url,
+            attribute: response.attribute,
+            inventoryPrice: response.inventory_price,
+            marketPrice: response.market_price,
+            setName: response.set_name,
+            subTypes: response.sub_types,
+            life: response.life != nil ? String(response.life!) : nil,  // Convert Int to String
+            dateScrapped: response.date_scraped,
+            cardImageId: response.card_image_id,
+            trigger: response.trigger
+        )
     }
 }
 

@@ -1,5 +1,16 @@
 import SwiftUI
 
+extension View {
+    @ViewBuilder
+    func `if`<Content: View>(_ condition: Bool, transform: (Self) -> Content) -> some View {
+        if condition {
+            transform(self)
+        } else {
+            self
+        }
+    }
+}
+
 enum BackgroundType: String, CaseIterable, Identifiable {
     case original = "original"
     case potential = "potential"
@@ -16,21 +27,49 @@ enum BackgroundType: String, CaseIterable, Identifiable {
     }
 }
 
+enum AppColorScheme: String, CaseIterable, Identifiable {
+    case system = "system"
+    case light = "light"
+    case dark = "dark"
+    
+    var id: String { self.rawValue }
+    
+    var displayName: String {
+        switch self {
+        case .system: return "System"
+        case .light: return "Light"
+        case .dark: return "Dark"
+        }
+    }
+    
+    var colorScheme: ColorScheme? {
+        switch self {
+        case .system: return nil
+        case .light: return .light
+        case .dark: return .dark
+        }
+    }
+}
+
 struct LandingView: View {
     @Binding var showBinder: Bool
     @Binding var selectedBackground: BackgroundType
+    @Binding var selectedColorScheme: AppColorScheme
     @EnvironmentObject var vm: BinderViewModel
+    let binderTransition: Namespace.ID
     @State private var binderScale: CGFloat = 1.0
     @State private var titleOpacity: Double = 0.0
     @State private var subtitleOpacity: Double = 0.0
     @State private var showProfile: Bool = false
     @State private var showTCGSelection: Bool = false
     @State private var showSettings: Bool = false
+    @State private var isTransitioning: Bool = false
     
     var body: some View {
         ZStack {
             AppBackground(selectedBackground: selectedBackground)
                 .ignoresSafeArea()
+            
             
             // Main centered content
             VStack(spacing: 16) {
@@ -39,14 +78,22 @@ struct LandingView: View {
                     .resizable()
                     .scaledToFit()
                     .frame(maxHeight: 150)
-                    .opacity(titleOpacity)
+                    .opacity(isTransitioning ? 0.0 : titleOpacity)
+                    .animation(.easeOut(duration: 0.3), value: isTransitioning)
                     .onLongPressGesture(minimumDuration: 3.0) {
                         // Hidden developer feature: long press title to clear all data
                         vm.clearAllData()
                     }
                 
                 // Binder Carousel
-                BinderCarouselView(showBinder: $showBinder)
+                BinderCarouselView(
+                    showBinder: $showBinder,
+                    binderTransition: binderTransition,
+                    isTransitioning: $isTransitioning,
+                    onExpansionTrigger: { color in
+                        triggerExpansionAnimation(color: color)
+                    }
+                )
                 .scaleEffect(binderScale)
                 .animation(.spring(response: 0.5, dampingFraction: 0.7), value: binderScale)
                 
@@ -79,7 +126,8 @@ struct LandingView: View {
                         .font(.subheadline)
                         .foregroundStyle(.secondary)
                 }
-                .opacity(subtitleOpacity)
+                .opacity(isTransitioning ? 0.0 : subtitleOpacity)
+                .animation(.easeOut(duration: 0.3), value: isTransitioning)
                 .padding(.top, 8)
                 
                 // TCG Selection Button
@@ -108,13 +156,12 @@ struct LandingView: View {
                             .stroke(.secondary.opacity(0.3), lineWidth: 1)
                     )
                 }
-                .opacity(subtitleOpacity)
+                .opacity(isTransitioning ? 0.0 : subtitleOpacity)
+                .animation(.easeOut(duration: 0.3), value: isTransitioning)
             }
             .padding(.top, -50)
         }
         .onAppear {
-            print("📱 LandingView appeared - TCG: \(vm.selectedTCG.displayName), binderName: \(vm.binderName)")
-            
             // Animate title appearance
             withAnimation(.easeOut(duration: 0.8).delay(0.3)) {
                 titleOpacity = 1.0
@@ -124,18 +171,25 @@ struct LandingView: View {
                 subtitleOpacity = 1.0
             }
         }
-        .onChange(of: vm.selectedTCG) { oldValue, newValue in
-            print("🔄 LandingView detected TCG change: \(oldValue.displayName) → \(newValue.displayName)")
-        }
         .sheet(isPresented: $showProfile) {
             ProfileView(selectedBackground: selectedBackground)
+                .preferredColorScheme(selectedColorScheme.colorScheme)
         }
         .sheet(isPresented: $showTCGSelection) {
             TCGSelectionView()
+                .preferredColorScheme(selectedColorScheme.colorScheme)
         }
         .sheet(isPresented: $showSettings) {
-            SettingsView(selectedBackground: $selectedBackground)
+            SettingsView(selectedBackground: $selectedBackground, selectedColorScheme: $selectedColorScheme)
+                .preferredColorScheme(selectedColorScheme.colorScheme)
         }
+    }
+    
+    // MARK: - Animation Functions
+    
+    private func triggerExpansionAnimation(color: Color) {
+        // The matchedGeometryEffect will handle the transformation
+        // This function can be simplified or potentially removed
     }
 }
 
@@ -159,7 +213,6 @@ struct TCGSelectionView: View {
                     VStack(spacing: 20) {
                         ForEach(TCGType.allCases, id: \.self) { tcgType in
                             Button {
-                                print("🔘 User selected \(tcgType.displayName) (current: \(vm.selectedTCG.displayName))")
                                 withAnimation(.spring(response: 0.3, dampingFraction: 0.7)) {
                                     vm.switchTCG(to: tcgType)
                                 }
@@ -231,6 +284,7 @@ struct TCGSelectionView: View {
 // MARK: - Settings View
 struct SettingsView: View {
     @Binding var selectedBackground: BackgroundType
+    @Binding var selectedColorScheme: AppColorScheme
     @Environment(\.dismiss) private var dismiss
     
     var body: some View {
@@ -241,6 +295,90 @@ struct SettingsView: View {
                 
                 ScrollView {
                     VStack(spacing: 24) {
+                        // Appearance Section
+                        VStack(alignment: .leading, spacing: 16) {
+                            HStack {
+                                Image(systemName: "paintbrush")
+                                    .font(.title3)
+                                    .foregroundStyle(.blue)
+                                Text("Appearance")
+                                    .font(.title2.weight(.semibold))
+                                    .foregroundStyle(.primary)
+                                Spacer()
+                            }
+                            .padding(.horizontal)
+                            
+                            // Color Scheme Section
+                            VStack(spacing: 12) {
+                                ForEach(AppColorScheme.allCases, id: \.self) { colorScheme in
+                                    Button {
+                                        selectedColorScheme = colorScheme
+                                    } label: {
+                                        HStack(spacing: 16) {
+                                            // Color scheme icon
+                                            ZStack {
+                                                RoundedRectangle(cornerRadius: 12)
+                                                    .frame(width: 60, height: 40)
+                                                    .overlay {
+                                                        switch colorScheme {
+                                                        case .system:
+                                                            HStack(spacing: 0) {
+                                                                Rectangle()
+                                                                    .fill(Color.black)
+                                                                Rectangle()
+                                                                    .fill(Color.white)
+                                                            }
+                                                            .clipShape(RoundedRectangle(cornerRadius: 12))
+                                                        case .light:
+                                                            Rectangle()
+                                                                .fill(Color.white)
+                                                                .overlay(
+                                                                    RoundedRectangle(cornerRadius: 12)
+                                                                        .stroke(Color.black.opacity(0.2), lineWidth: 1)
+                                                                )
+                                                                .clipShape(RoundedRectangle(cornerRadius: 12))
+                                                        case .dark:
+                                                            Rectangle()
+                                                                .fill(Color.black)
+                                                                .clipShape(RoundedRectangle(cornerRadius: 12))
+                                                        }
+                                                    }
+                                            }
+                                            
+                                            // Color scheme name
+                                            Text(colorScheme.displayName)
+                                                .font(.headline)
+                                                .foregroundStyle(.primary)
+                                            
+                                            Spacer()
+                                            
+                                            // Selection indicator
+                                            if selectedColorScheme == colorScheme {
+                                                Image(systemName: "checkmark.circle.fill")
+                                                    .font(.title3)
+                                                    .foregroundStyle(.blue)
+                                            } else {
+                                                Image(systemName: "circle")
+                                                    .font(.title3)
+                                                    .foregroundStyle(.secondary)
+                                            }
+                                        }
+                                        .padding(.horizontal, 20)
+                                        .padding(.vertical, 16)
+                                        .background {
+                                            RoundedRectangle(cornerRadius: 16)
+                                                .fill(.ultraThinMaterial)
+                                        }
+                                        .overlay {
+                                            RoundedRectangle(cornerRadius: 16)
+                                                .stroke(selectedColorScheme == colorScheme ? .blue : .clear, lineWidth: 2)
+                                        }
+                                    }
+                                }
+                            }
+                            .padding(.horizontal)
+                        }
+                        
                         // Background Section
                         VStack(alignment: .leading, spacing: 16) {
                             HStack {
@@ -348,10 +486,14 @@ struct SettingsView: View {
 struct BinderCarouselView: View {
     @EnvironmentObject var vm: BinderViewModel
     @Binding var showBinder: Bool
+    let binderTransition: Namespace.ID
+    @Binding var isTransitioning: Bool
+    let onExpansionTrigger: (Color) -> Void
     @State private var dragOffset: CGFloat = 0
     @State private var currentIndex: Int = 0
     @State private var isPressed: Bool = false
     @GestureState private var isLongPressing = false
+    @State private var isTransforming: Bool = false
     
     private let binders = BinderType.allCases
     private let binderWidth: CGFloat = 280
@@ -366,12 +508,27 @@ struct BinderCarouselView: View {
                         BinderCard(
                             binder: binder,
                             isSelected: vm.selectedBinder == binder,
+                            isTransforming: isTransforming && vm.selectedBinder == binder,
+                            binderTransition: binderTransition,
                             onClick: {
                                 if vm.selectedBinder == binder {
-                                    // If already selected, open the binder
-                                    showBinder = true
+                                    // If already selected, start transformation with automatic navigation
+                                    isTransforming = true
+                                    isTransitioning = true
+                                    onExpansionTrigger(binder.color)
+                                    
+                                    // Trigger navigation change immediately for automatic transition
+                                    withAnimation(.easeInOut(duration: 0.6)) {
+                                        showBinder = true
+                                    }
+                                    
+                                    // Reset states after transition
+                                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) {
+                                        isTransforming = false
+                                        isTransitioning = false
+                                    }
                                 } else {
-                                    // If not selected, switch to this binder
+                                    // If not selected, switch to this binder (circular navigation)
                                     withAnimation(.spring(response: 0.5, dampingFraction: 0.8)) {
                                         vm.switchBinder(to: binder)
                                         currentIndex = index
@@ -402,16 +559,16 @@ struct BinderCarouselView: View {
                         let shouldMoveLeft = value.translation.width < -threshold || velocity < -100
                         let shouldMoveRight = value.translation.width > threshold || velocity > 100
                         
-                        if shouldMoveRight && currentIndex > 0 {
-                            // Swipe right - go to previous binder
+                        if shouldMoveRight {
+                            // Swipe right - go to previous binder (circular)
                             withAnimation(.spring(response: 0.5, dampingFraction: 0.8)) {
-                                currentIndex -= 1
+                                currentIndex = (currentIndex - 1 + binders.count) % binders.count
                                 vm.switchBinder(to: binders[currentIndex])
                             }
-                        } else if shouldMoveLeft && currentIndex < binders.count - 1 {
-                            // Swipe left - go to next binder
+                        } else if shouldMoveLeft {
+                            // Swipe left - go to next binder (circular)
                             withAnimation(.spring(response: 0.5, dampingFraction: 0.8)) {
-                                currentIndex += 1
+                                currentIndex = (currentIndex + 1) % binders.count
                                 vm.switchBinder(to: binders[currentIndex])
                             }
                         }
@@ -429,19 +586,35 @@ struct BinderCarouselView: View {
         }
     }
     
+    // Helper function to calculate circular distance
+    private func circularDistance(from sourceIndex: Int, to targetIndex: Int, totalCount: Int) -> Int {
+        var distance = targetIndex - sourceIndex
+        
+        // Normalize to shortest path around the circle
+        if distance > totalCount / 2 {
+            distance -= totalCount
+        } else if distance < -totalCount / 2 {
+            distance += totalCount
+        }
+        
+        return distance
+    }
+    
     private func offsetForBinder(at index: Int) -> CGFloat {
         let selectedIndex = binders.firstIndex(of: vm.selectedBinder) ?? 0
-        let relativeIndex = index - selectedIndex
-        let spacing: CGFloat = 60 // Better spacing for visibility
+        let relativeIndex = circularDistance(from: selectedIndex, to: index, totalCount: binders.count)
+        
+        let spacing: CGFloat = 60
         let baseOffset = CGFloat(relativeIndex) * spacing
-        return baseOffset + dragOffset * 0.5 // More responsive to drag
+        return baseOffset + dragOffset * 0.5
     }
     
     private func scaleForBinder(at index: Int) -> CGFloat {
         let selectedIndex = binders.firstIndex(of: vm.selectedBinder) ?? 0
-        let relativeIndex = abs(index - selectedIndex)
+        let relativeIndex = circularDistance(from: selectedIndex, to: index, totalCount: binders.count)
+        let absRelativeIndex = abs(relativeIndex)
         
-        switch relativeIndex {
+        switch absRelativeIndex {
         case 0: return 1.0 // Front binder - full size
         case 1: return 0.9 // Second binder - slightly smaller
         default: return 0.8 // Back binders - smaller
@@ -450,9 +623,10 @@ struct BinderCarouselView: View {
     
     private func opacityForBinder(at index: Int) -> Double {
         let selectedIndex = binders.firstIndex(of: vm.selectedBinder) ?? 0
-        let relativeIndex = abs(index - selectedIndex)
+        let relativeIndex = circularDistance(from: selectedIndex, to: index, totalCount: binders.count)
+        let absRelativeIndex = abs(relativeIndex)
         
-        switch relativeIndex {
+        switch absRelativeIndex {
         case 0: return 1.0 // Front binder - fully visible
         case 1: return 0.8 // Second binder - slightly faded
         default: return 0.6 // Back binders - more faded
@@ -461,9 +635,10 @@ struct BinderCarouselView: View {
     
     private func yOffsetForBinder(at index: Int) -> CGFloat {
         let selectedIndex = binders.firstIndex(of: vm.selectedBinder) ?? 0
-        let relativeIndex = abs(index - selectedIndex)
+        let relativeIndex = circularDistance(from: selectedIndex, to: index, totalCount: binders.count)
+        let absRelativeIndex = abs(relativeIndex)
         
-        switch relativeIndex {
+        switch absRelativeIndex {
         case 0: return 0 // Front binder - no vertical offset
         case 1: return 10 // Second binder - slightly back
         default: return 20 // Back binders - further back
@@ -472,7 +647,7 @@ struct BinderCarouselView: View {
     
     private func zIndexForBinder(at index: Int) -> Double {
         let selectedIndex = binders.firstIndex(of: vm.selectedBinder) ?? 0
-        let relativeIndex = index - selectedIndex
+        let relativeIndex = circularDistance(from: selectedIndex, to: index, totalCount: binders.count)
         
         // Front binder has highest z-index, decreasing as we go back
         return Double(binders.count - abs(relativeIndex))
@@ -482,6 +657,8 @@ struct BinderCarouselView: View {
 struct BinderCard: View {
     let binder: BinderType
     let isSelected: Bool
+    let isTransforming: Bool
+    let binderTransition: Namespace.ID
     let onClick: () -> Void
     
     @State private var isPressed: Bool = false
@@ -495,7 +672,7 @@ struct BinderCard: View {
                 .frame(width: 280, height: 350)
                 .offset(x: 8, y: 12)
             
-            // Binder Base
+            // Binder Base - zoom source for selected binder
             RoundedRectangle(cornerRadius: 20)
                 .fill(binder.color)
                 .frame(width: 280, height: 350)
@@ -503,6 +680,9 @@ struct BinderCard: View {
                     RoundedRectangle(cornerRadius: 20)
                         .stroke(Color.black.opacity(0.15), lineWidth: 2)
                 )
+                .if(isSelected) { view in
+                    view.navigationTransition(.zoom(sourceID: "selectedBinder", in: binderTransition))
+                }
             
             // Binder Image
             Image(binder.imageName)
@@ -531,9 +711,11 @@ struct BinderCard: View {
                 isPressed = true
             }
             
-            // Expand animation when selected
-            withAnimation(.spring(response: 0.5, dampingFraction: 0.6)) {
-                selectionScale = 1.05
+            // Card scale animation for selection feedback
+            if !isTransforming {
+                withAnimation(.spring(response: 0.5, dampingFraction: 0.6)) {
+                    selectionScale = 1.05
+                }
             }
             
             // Call the click action
@@ -546,9 +728,11 @@ struct BinderCard: View {
                 }
             }
             
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
-                withAnimation(.spring(response: 0.4, dampingFraction: 0.8)) {
-                    selectionScale = 1.0
+            if !isTransforming {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+                    withAnimation(.spring(response: 0.4, dampingFraction: 0.8)) {
+                        selectionScale = 1.0
+                    }
                 }
             }
         }
@@ -569,6 +753,7 @@ struct BinderCard: View {
 }
 #Preview {
     @State var showBinder = false
+    @Namespace var previewTransition
     
     // Create a simple preview version
     @StateObject var previewVM = {
@@ -576,7 +761,12 @@ struct BinderCard: View {
         return vm
     }()
     
-    return LandingView(showBinder: $showBinder, selectedBackground: .constant(.original))
-        .environmentObject(previewVM)
-        .preferredColorScheme(.light)
+    return LandingView(
+        showBinder: $showBinder, 
+        selectedBackground: .constant(.original),
+        selectedColorScheme: .constant(.system),
+        binderTransition: previewTransition
+    )
+    .environmentObject(previewVM)
+    .preferredColorScheme(.light)
 }

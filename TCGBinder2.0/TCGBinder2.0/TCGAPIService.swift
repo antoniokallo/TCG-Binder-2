@@ -200,7 +200,7 @@ class PokemonAPIService: ObservableObject, TCGAPIService {
 struct PokemonCardResponse: Codable {
     let id: String
     let name: String
-    let image_url: String?
+    let image_small: String?
     let set_id: String?
     let rarity: String?
     let hp: Int?
@@ -208,6 +208,11 @@ struct PokemonCardResponse: Codable {
     let subtypes: [String]?
     let abilities: [PokemonAbility]?
     let tcgplayer_market_price: Double?
+    
+    // Computed property to maintain compatibility with existing code
+    var image_url: String? {
+        return image_small
+    }
     
     struct PokemonAbility: Codable {
         let name: String?

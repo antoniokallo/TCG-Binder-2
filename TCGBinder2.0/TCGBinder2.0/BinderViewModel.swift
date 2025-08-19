@@ -22,6 +22,12 @@ final class BinderViewModel: ObservableObject {
     @Published var selectedTCG: TCGType = .onePiece
     @Published var selectedBinder: BinderType = .green
     
+    // Pokemon persistence service
+    private let pokemonPersistenceService = PokemonCardPersistenceService()
+    
+    // Track if Pokemon cards have been loaded this session (per binder)
+    private var pokemonCardsLoadedThisSession: [BinderType: Bool] = [:]
+    
     // Separate data for each binder type
     private var binderData: [BinderType: BinderData] = [:]
 
@@ -35,14 +41,11 @@ final class BinderViewModel: ObservableObject {
     private var cardCache: [String: OnePieceCard] = [:]
 
     init() {
-        print("🚀 Initializing BinderViewModel...")
-        
         // Check if this is a fresh install or if we want to clear data
         let ud = UserDefaults.standard
         let hasLaunchedBefore = ud.bool(forKey: "hasLaunchedBefore")
         
         if !hasLaunchedBefore {
-            print("🆕 First launch detected - clearing any existing data")
             // Clear any residual data from previous installs
             clearAllDataSilently()
             ud.set(true, forKey: "hasLaunchedBefore")
@@ -53,13 +56,6 @@ final class BinderViewModel: ObservableObject {
         
         if currentSetID == nil { 
             currentSetID = sets.first?.id 
-            print("🎯 Set current set to: \(currentSetID ?? "none")")
-        }
-        
-        print("✅ BinderViewModel initialized with \(sets.count) sets")
-        print("🎮 Selected TCG: \(selectedTCG.displayName)")
-        for set in sets {
-            print("  - \(set.name): \(set.cards.count) cards")
         }
     }
 
@@ -137,18 +133,14 @@ final class BinderViewModel: ObservableObject {
     
     func addOnePieceCard(_ onePieceCard: OnePieceCard, to setID: String) {
         guard let setIndex = sets.firstIndex(where: { $0.id == setID }) else { 
-            print("❌ Could not find set with ID: \(setID)")
             return 
         }
         
         let cardID = "\(setID)-\(sets[setIndex].cards.count + 1)"
-        let url = URL(string: onePieceCard.image ?? "about:blank") ?? URL(string: "about:blank")!
-        
-        print("🎴 Adding card: \(onePieceCard.name) with ID: \(cardID)")
+        let url = URL(string: onePieceCard.cardImage ?? "about:blank") ?? URL(string: "about:blank")!
         
         // Cache the full API data separately
         cardCache[cardID] = onePieceCard
-        print("💾 Cached API data for \(cardID)")
         
         // Create simplified binder card
         let newCard = TCGCard(
@@ -172,12 +164,24 @@ final class BinderViewModel: ObservableObject {
         )
         
         sets[setIndex].cards.append(newCard)
-        print("📚 Added card to set \(setID). Set now has \(sets[setIndex].cards.count) cards")
         
         // Navigate to the page containing the new card
         let cardIndex = sets[setIndex].cards.count - 1
         let pageIndex = cardIndex / 9
         setPageIndex(pageIndex, for: setID)
+        
+        // If this is a Pokemon card, also save to Supabase
+        if selectedTCG == .pokemon {
+            Task {
+                do {
+                    try await pokemonPersistenceService.addPokemonCard(
+                        cardId: onePieceCard.cardSetId ?? onePieceCard.id ?? cardID
+                    )
+                } catch {
+                    // Silently handle the error
+                }
+            }
+        }
         
         // Persist the changes
         persist()
@@ -187,6 +191,178 @@ final class BinderViewModel: ObservableObject {
     
     func getCachedCardData(for cardID: String) -> OnePieceCard? {
         return cardCache[cardID]
+    }
+    
+    // MARK: - Pokemon Card Persistence
+    
+    func loadPokemonCardsIfNeeded() async {
+        // Only load if we're in Pokemon mode
+        guard selectedTCG == .pokemon else {
+            return
+        }
+        
+        // Check if we already have Pokemon cards loaded for this binder (prevent duplicates)
+        let hasPokemonCards = sets.first?.cards.contains { card in
+            card.id.contains("-copy") || cardCache[card.id] != nil
+        } ?? false
+        
+        // If we already loaded cards for this binder this session and they're still there, skip
+        if hasPokemonCards && (pokemonCardsLoadedThisSession[selectedBinder] ?? false) {
+            return
+        }
+        
+        await loadPokemonCardsFromSupabase()
+        pokemonCardsLoadedThisSession[selectedBinder] = true
+    }
+    
+    private func loadPokemonCardsFromSupabase() async {
+        do {
+            // Clean up any invalid quantities first
+            try await pokemonPersistenceService.cleanupInvalidQuantities()
+            
+            // Clear existing Pokemon cards to prevent duplicates
+            if selectedTCG == .pokemon {
+                for setIndex in sets.indices {
+                    // Only remove Pokemon cards (those added from Supabase)
+                    sets[setIndex].cards.removeAll { card in
+                        // Pokemon cards have specific ID patterns from our loading process
+                        return card.id.contains("-copy") || cardCache[card.id] != nil
+                    }
+                }
+                // Clear the card cache for Pokemon cards
+                cardCache.removeAll()
+            }
+            
+            // Get saved Pokemon cards for this user
+            let userCards = try await pokemonPersistenceService.loadPokemonCards()
+            
+            guard !userCards.isEmpty else {
+                return
+            }
+            
+            // Get the unique Pokemon card IDs
+            let cardIds = userCards.map { $0.cardId }
+            
+            // Fetch the actual Pokemon card data
+            let pokemonCardDetails = try await pokemonPersistenceService.getPokemonCardDetails(for: cardIds)
+            
+            // Create a lookup dictionary for quick access
+            let cardDetailsLookup = Dictionary(uniqueKeysWithValues: pokemonCardDetails.map { ($0.id, $0) })
+            
+            // Convert to OnePieceCard format and add to binder (respecting quantities)
+            for userCard in userCards {
+                guard let pokemonCardDetail = cardDetailsLookup[userCard.cardId] else {
+                    continue
+                }
+                
+                // Convert to OnePieceCard format
+                let onePieceCard = convertPokemonToOnePieceCard(pokemonCardDetail)
+                
+                // Add multiple copies based on quantity (only if qty > 0)
+                if let firstSet = sets.first, userCard.qty > 0 {
+                    for copyIndex in 1...userCard.qty {
+                        let binderCardId = "\(firstSet.id)-\(pokemonCardDetail.name)-\(userCard.cardId)-copy\(copyIndex)"
+                        addCardToSet(onePieceCard, setId: firstSet.id, binderCardId: binderCardId)
+                    }
+                }
+            }
+            
+        } catch {
+            // Silently handle the error
+        }
+    }
+    
+    private func convertPokemonToOnePieceCard(_ pokemonCard: PokemonCardResponse) -> OnePieceCard {
+        
+        return OnePieceCard(
+            cardName: pokemonCard.name,
+            rarity: pokemonCard.rarity,
+            cardCost: nil,
+            cardPower: pokemonCard.hp != nil ? String(pokemonCard.hp!) : nil,
+            counterAmount: nil,
+            cardColor: pokemonCard.types?.first,
+            cardType: pokemonCard.types?.joined(separator: ", "),
+            cardText: pokemonCard.abilities?.first?.text,
+            setId: pokemonCard.set_id,
+            cardSetId: pokemonCard.id,
+            cardImage: pokemonCard.image_url,
+            attribute: pokemonCard.subtypes?.joined(separator: ", "),
+            inventoryPrice: pokemonCard.tcgplayer_market_price,
+            marketPrice: pokemonCard.tcgplayer_market_price,
+            setName: pokemonCard.set_id,
+            subTypes: pokemonCard.subtypes?.joined(separator: ", "),
+            life: nil,
+            dateScrapped: nil,
+            cardImageId: pokemonCard.id,
+            trigger: nil
+        )
+    }
+    
+    private func addCardToSet(_ onePieceCard: OnePieceCard, setId: String, binderCardId: String) {
+        guard let setIndex = sets.firstIndex(where: { $0.id == setId }) else {
+            return
+        }
+        
+        let url = URL(string: onePieceCard.cardImage ?? "about:blank") ?? URL(string: "about:blank")!
+        
+        // Cache the full API data
+        cardCache[binderCardId] = onePieceCard
+        
+        // Create the TCGCard for the binder
+        let tcgCard = TCGCard(
+            id: binderCardId,
+            name: onePieceCard.name,
+            imageURL: url,
+            setID: setId,
+            rarity: onePieceCard.rarity,
+            cardCost: onePieceCard.cardCost,
+            cardPower: onePieceCard.cardPower,
+            counterAmount: onePieceCard.counterAmount,
+            cardColor: onePieceCard.cardColor,
+            cardType: onePieceCard.cardType,
+            cardText: onePieceCard.cardText,
+            attribute: onePieceCard.attribute,
+            inventoryPrice: onePieceCard.inventoryPrice,
+            marketPrice: onePieceCard.marketPrice,
+            subTypes: onePieceCard.subTypes,
+            life: onePieceCard.life,
+            trigger: onePieceCard.trigger
+        )
+        
+        sets[setIndex].cards.append(tcgCard)
+    }
+    
+    // MARK: - Remove Pokemon Card
+    
+    func removePokemonCard(_ card: TCGCard) {
+        guard selectedTCG == .pokemon else {
+            return
+        }
+        
+        // Find and remove the card from the set
+        guard let setIndex = sets.firstIndex(where: { $0.id == card.setID }),
+              let cardIndex = sets[setIndex].cards.firstIndex(where: { $0.id == card.id }) else {
+            return
+        }
+        
+        // Get the original Pokemon card ID for Supabase
+        let pokemonCardId = cardCache[card.id]?.cardSetId ?? card.id
+        
+        // Remove from local binder
+        sets[setIndex].cards.remove(at: cardIndex)
+        cardCache.removeValue(forKey: card.id)
+        
+        // Update Supabase quantity
+        Task {
+            do {
+                try await pokemonPersistenceService.removePokemonCard(cardId: pokemonCardId)
+            } catch {
+                // Silently handle the error
+            }
+        }
+        
+        // Persist local changes
+        persist()
     }
     
     // MARK: - Binder Name Management
@@ -200,14 +376,26 @@ final class BinderViewModel: ObservableObject {
     
     func switchBinder(to newBinder: BinderType) {
         guard newBinder != selectedBinder else { 
-            print("🔄 No switch needed - already on \(newBinder.displayName)")
             return 
         }
         
-        print("🔄 Starting switch from \(selectedBinder.displayName) to \(newBinder.displayName)")
-        
-        // Save current binder data
+        // Save current binder data (this will filter out Pokemon cards)
         saveCurrentBinderData()
+        
+        // Clear Pokemon cards from current session since they don't belong to binders
+        if selectedTCG == .pokemon {
+            for setIndex in sets.indices {
+                sets[setIndex].cards.removeAll { card in
+                    card.id.contains("-copy") || cardCache[card.id] != nil
+                }
+            }
+            let keysToRemove = cardCache.keys.filter { key in
+                key.contains("-copy")
+            }
+            for key in keysToRemove {
+                cardCache.removeValue(forKey: key)
+            }
+        }
         
         // Switch to new binder
         selectedBinder = newBinder
@@ -215,22 +403,42 @@ final class BinderViewModel: ObservableObject {
         // Load data for new binder
         loadBinderData()
         
+        // If new binder is in Pokemon mode, reload Pokemon cards
+        if selectedTCG == .pokemon {
+            pokemonCardsLoadedThisSession[selectedBinder] = false
+            Task {
+                await loadPokemonCardsIfNeeded()
+            }
+        }
+        
         // Persist the selected binder
         UserDefaults.standard.set(selectedBinder.rawValue, forKey: selectedBinderKey)
-        
-        print("✅ Binder switch complete to \(newBinder.displayName)")
-        print("📊 New state: \(sets.count) sets, currentSetID: \(currentSetID ?? "none")")
-        print("📛 Binder name: \(binderName)")
     }
     
     private func saveCurrentBinderData() {
+        // Filter out Pokemon cards from sets before saving (they should not be persisted per-binder)
+        var setsToSave = sets
+        if selectedTCG == .pokemon {
+            for index in setsToSave.indices {
+                setsToSave[index].cards.removeAll { card in
+                    card.id.contains("-copy") || cardCache[card.id] != nil
+                }
+            }
+        }
+        
+        // Filter out Pokemon cards from cardCache before saving
+        var cacheToSave = cardCache
+        if selectedTCG == .pokemon {
+            cacheToSave.removeAll()
+        }
+        
         let currentData = BinderData(
-            sets: sets,
+            sets: setsToSave,
             currentSetID: currentSetID,
             spreadIndexBySet: spreadIndexBySet,
             binderName: binderName,
             selectedTCG: selectedTCG,
-            cardCache: cardCache
+            cardCache: cacheToSave
         )
         
         binderData[selectedBinder] = currentData
@@ -284,11 +492,8 @@ final class BinderViewModel: ObservableObject {
     
     func switchTCG(to newTCG: TCGType) {
         guard newTCG != selectedTCG else { 
-            print("🔄 No switch needed - already on \(newTCG.displayName)")
             return 
         }
-        
-        print("🔄 Starting TCG switch from \(selectedTCG.displayName) to \(newTCG.displayName) for binder: \(selectedBinder.displayName)")
         
         // Save current state before switching
         saveCurrentBinderData()
@@ -309,27 +514,23 @@ final class BinderViewModel: ObservableObject {
             binderName = selectedBinder.defaultName
         }
         
+        // Reset Pokemon loading flag for this binder when switching to OR FROM Pokemon
+        pokemonCardsLoadedThisSession[selectedBinder] = false
+        
         // Save the updated state
         saveCurrentBinderData()
         
-        print("✅ TCG switch complete to \(newTCG.displayName)")
-        print("📊 New state: \(sets.count) sets, currentSetID: \(currentSetID ?? "none")")
-        print("📛 Binder name: \(binderName)")
     }
     
     // MARK: - Persistence
 
     private func loadPersistedInitial() {
         let ud = UserDefaults.standard
-        print("🔄 Starting initial persistence load...")
         
         // Load selected binder first
         if let binderRawValue = ud.string(forKey: selectedBinderKey),
            let binderType = BinderType(rawValue: binderRawValue) {
             self.selectedBinder = binderType
-            print("✅ Loaded selected binder: \(binderType.displayName)")
-        } else {
-            print("ℹ️ No saved binder found, using default: \(selectedBinder.displayName)")
         }
         
         // Load data for the selected binder
@@ -348,8 +549,6 @@ final class BinderViewModel: ObservableObject {
     // MARK: - Data Management
     
     func clearAllData() {
-        print("🧹 Clearing all persisted data...")
-        
         // Clear all data silently
         clearAllDataSilently()
         
@@ -368,8 +567,6 @@ final class BinderViewModel: ObservableObject {
         
         // Create default data for current binder
         createDefaultBinderData()
-        
-        print("✅ All data cleared and reset to empty state")
     }
     
     private func clearAllDataSilently() {
@@ -402,11 +599,7 @@ final class BinderViewModel: ObservableObject {
     private func loadMockSets() {
         // Only load mock sets if no persisted data was found
         if sets.isEmpty {
-            print("📦 Loading empty sets for \(selectedTCG.displayName)...")
             self.sets = selectedTCG.defaultSets
-            print("✅ Created \(sets.count) empty sets for \(selectedTCG.displayName)")
-        } else {
-            print("ℹ️ Skipping mock data - using persisted sets for \(selectedTCG.displayName)")
         }
     }
 }

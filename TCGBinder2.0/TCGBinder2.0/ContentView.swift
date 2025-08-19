@@ -1,30 +1,113 @@
 import SwiftUI
 
+// MARK: - Card Image Component
+struct CardImageView: View {
+    let imageUrl: String
+    let width: CGFloat?
+    let height: CGFloat?
+    
+    init(imageUrl: String, width: CGFloat? = nil, height: CGFloat? = nil) {
+        self.imageUrl = imageUrl
+        self.width = width
+        self.height = height
+    }
+    
+    var body: some View {
+        AsyncImage(url: URL(string: imageUrl)) { phase in
+            switch phase {
+            case .success(let image):
+                image
+                    .resizable()
+                    .scaledToFit()
+                    .if(width != nil && height != nil) { view in
+                        view.frame(width: width!, height: height!)
+                    }
+            case .failure(let error):
+                RoundedRectangle(cornerRadius: 8)
+                    .fill(Color.gray.opacity(0.2))
+                    .overlay(
+                        VStack {
+                            Image(systemName: "photo")
+                                .foregroundColor(.gray)
+                            Text("Failed")
+                                .font(.caption)
+                                .foregroundColor(.gray)
+                        }
+                    )
+                    .if(width != nil && height != nil) { view in
+                        view.frame(width: width!, height: height!)
+                    }
+                    .aspectRatio(5.0/7.0, contentMode: .fit)
+            case .empty:
+                ProgressView()
+                    .if(width != nil && height != nil) { view in
+                        view.frame(width: width!, height: height!)
+                    }
+                    .aspectRatio(5.0/7.0, contentMode: .fit)
+                    .background(Color.gray.opacity(0.1))
+                    .cornerRadius(8)
+            @unknown default:
+                EmptyView()
+            }
+        }
+        .aspectRatio(5.0/7.0, contentMode: .fit)
+        .cornerRadius(8)
+    }
+}
+
 struct ContentView: View {
     @StateObject private var vm = BinderViewModel()
     @State private var showBinder = false
     @State private var selectedBackground: BackgroundType = .original
+    @State private var selectedColorScheme: AppColorScheme = .system
+    @Namespace private var binderTransition
     
     init() {
         // Load saved background preference
         let savedBackground = UserDefaults.standard.string(forKey: "selectedBackground") ?? "original"
         _selectedBackground = State(initialValue: BackgroundType(rawValue: savedBackground) ?? .original)
+        
+        // Load saved color scheme preference
+        let savedColorScheme = UserDefaults.standard.string(forKey: "selectedColorScheme") ?? "system"
+        _selectedColorScheme = State(initialValue: AppColorScheme(rawValue: savedColorScheme) ?? .system)
     }
 
     var body: some View {
-        if showBinder {
-            BinderMainView(showBinder: $showBinder, selectedBackground: $selectedBackground)
+        NavigationStack {
+            if showBinder {
+                BinderMainView(
+                    showBinder: $showBinder, 
+                    selectedBackground: $selectedBackground,
+                    selectedColorScheme: $selectedColorScheme,
+                    binderTransition: binderTransition
+                )
                 .environmentObject(vm)
+                .navigationTransition(.zoom(sourceID: "selectedBinder", in: binderTransition))
                 .onChange(of: selectedBackground) { _, newValue in
                     UserDefaults.standard.set(newValue.rawValue, forKey: "selectedBackground")
                 }
-        } else {
-            LandingView(showBinder: $showBinder, selectedBackground: $selectedBackground)
+                .onChange(of: selectedColorScheme) { _, newValue in
+                    UserDefaults.standard.set(newValue.rawValue, forKey: "selectedColorScheme")
+                }
+            } else {
+                LandingView(
+                    showBinder: $showBinder, 
+                    selectedBackground: $selectedBackground,
+                    selectedColorScheme: $selectedColorScheme,
+                    binderTransition: binderTransition
+                )
                 .environmentObject(vm)
+                .navigationTransition(.zoom(sourceID: "selectedBinder", in: binderTransition))
                 .onChange(of: selectedBackground) { _, newValue in
                     UserDefaults.standard.set(newValue.rawValue, forKey: "selectedBackground")
                 }
+                .onChange(of: selectedColorScheme) { _, newValue in
+                    UserDefaults.standard.set(newValue.rawValue, forKey: "selectedColorScheme")
+                }
+            }
         }
+        .preferredColorScheme(selectedColorScheme.colorScheme)
+        .animation(.easeInOut(duration: 0.6), value: showBinder)
     }
 }
 
@@ -36,16 +119,22 @@ struct BinderMainView: View {
     @State private var tempBinderName = ""
     @Binding var showBinder: Bool
     @Binding var selectedBackground: BackgroundType
+    @Binding var selectedColorScheme: AppColorScheme
+    let binderTransition: Namespace.ID
 
     var body: some View {
         ZStack {
-            // Background layer - completely isolated and fills screen
-            AppBackground(selectedBackground: selectedBackground)
+            // Dynamic background based on selected binder color - zoom destination
+            BinderDynamicBackground(binderColor: vm.selectedBinder.color)
                 .onAppear {
-                    print("🎮 BinderMainView appeared - TCG: \(vm.selectedTCG.displayName)")
+                    Task {
+                        await vm.loadPokemonCardsIfNeeded()
+                    }
                 }
                 .onChange(of: vm.selectedTCG) { oldValue, newValue in
-                    print("🔄 BinderMainView detected TCG change: \(oldValue.displayName) → \(newValue.displayName)")
+                    Task {
+                        await vm.loadPokemonCardsIfNeeded()
+                    }
                 }
             
             // Content layer - uses standard SwiftUI layout
@@ -57,9 +146,6 @@ struct BinderMainView: View {
                     BinderPageView(set: set)
                         .environmentObject(vm)
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
-                        .onAppear {
-                            print("📄 Displaying set: \(set.name) with \(set.cards.count) cards")
-                        }
                 } else {
                     Spacer()
                     VStack {
@@ -69,12 +155,6 @@ struct BinderMainView: View {
                         Text("Available sets: \(vm.sets.count)")
                             .font(.caption)
                             .foregroundColor(.secondary)
-                    }
-                    .onAppear {
-                        print("❌ No current set found. Available sets: \(vm.sets.count)")
-                        for set in vm.sets {
-                            print("  - \(set.name): \(set.cards.count) cards")
-                        }
                     }
                     Spacer()
                 }
@@ -111,9 +191,11 @@ struct BinderMainView: View {
         .sheet(isPresented: $showAddCard) {
             AddCardView(isPresented: $showAddCard, selectedBackground: selectedBackground)
                 .environmentObject(vm)
+                .preferredColorScheme(selectedColorScheme.colorScheme)
         }
         .sheet(isPresented: $showProfile) {
             ProfileView(selectedBackground: selectedBackground)
+                .preferredColorScheme(selectedColorScheme.colorScheme)
         }
         .alert("Edit Binder Name", isPresented: $showNameEditor) {
             TextField("Binder Name", text: $tempBinderName)
@@ -381,7 +463,7 @@ struct CardSlot: View {
     @State private var pressed = false
 
     var body: some View {
-        RemoteImage(url: card.imageURL)
+        CardImageView(imageUrl: card.imageURL.absoluteString)
             .overlay(
                 RoundedRectangle(cornerRadius: 8)
                     .stroke(Color.black.opacity(0.15), lineWidth: 1)
@@ -416,6 +498,7 @@ struct EmptyCardSlot: View {
 
 struct CardDetailView: View {
     @EnvironmentObject var vm: BinderViewModel
+    @Environment(\.dismiss) private var dismiss
     let card: TCGCard
 
     var body: some View {
@@ -425,8 +508,7 @@ struct CardDetailView: View {
                     // Card Image
                     HStack {
                         Spacer()
-                        RemoteImage(url: card.imageURL)
-                            .frame(width: 200, height: 280)
+                        CardImageView(imageUrl: card.imageURL.absoluteString, width: 200, height: 280)
                             .clipShape(RoundedRectangle(cornerRadius: 12))
                         Spacer()
                     }
@@ -526,6 +608,25 @@ struct CardDetailView: View {
                                 .clipShape(RoundedRectangle(cornerRadius: 8))
                         }
                     }
+                    
+                    // Delete Button (Only for Pokemon cards)
+                    if vm.selectedTCG == .pokemon {
+                        Button {
+                            vm.removePokemonCard(card)
+                            dismiss()
+                        } label: {
+                            HStack {
+                                Image(systemName: "trash")
+                                Text("Remove from Binder")
+                            }
+                            .foregroundStyle(.white)
+                            .frame(maxWidth: .infinity)
+                            .padding()
+                            .background(.red)
+                            .clipShape(RoundedRectangle(cornerRadius: 12))
+                        }
+                        .padding(.top, 20)
+                    }
                 }
                 .padding()
             }
@@ -560,6 +661,28 @@ struct HandDrawnEdge: Shape {
         var p = Path(roundedRect: rect, cornerRadius: cornerRadius)
         p = p.strokedPath(.init(lineWidth: 1, lineCap: .round, lineJoin: .round, miterLimit: 2, dash: [3,4,2,5], dashPhase: 2))
         return p
+    }
+}
+
+struct BinderDynamicBackground: View {
+    let binderColor: Color
+    @State private var backgroundOpacity: Double = 1.0  // Start visible for seamless transition
+    
+    var body: some View {
+        GeometryReader { geometry in
+            LinearGradient(
+                colors: [
+                    binderColor.opacity(0.8),
+                    binderColor.opacity(0.5),
+                    binderColor.opacity(0.3)
+                ],
+                startPoint: .topLeading,
+                endPoint: .bottomTrailing
+            )
+            .frame(width: geometry.size.width, height: geometry.size.height)
+            .ignoresSafeArea()
+            .opacity(backgroundOpacity)
+        }
     }
 }
 
