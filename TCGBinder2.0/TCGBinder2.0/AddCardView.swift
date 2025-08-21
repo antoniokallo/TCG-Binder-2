@@ -5,6 +5,7 @@ struct AddCardView: View {
     @Binding var isPresented: Bool
     @StateObject private var onePieceAPIService = OnePieceAPIService()
     @StateObject private var pokemonAPIService = PokemonAPIService()
+    @StateObject private var yugiohAPIService = YuGiOhAPIService()
     let selectedBackground: BackgroundType
     
     private var currentAPIService: any TCGAPIService {
@@ -13,6 +14,8 @@ struct AddCardView: View {
             return onePieceAPIService
         case .pokemon:
             return pokemonAPIService
+        case .yugioh:
+            return yugiohAPIService
         }
     }
     
@@ -28,6 +31,17 @@ struct AddCardView: View {
     
     var availableSets: [(id: String, name: String)] {
         currentAPIService.getAvailableSets()
+    }
+    
+    var searchExamples: String {
+        switch vm.selectedTCG {
+        case .onePiece:
+            return "Examples: Luffy, Zoro, Ace, Whitebeard"
+        case .pokemon:
+            return "Examples: Pikachu, Charizard, Blastoise"
+        case .yugioh:
+            return "Examples: Blue-Eyes, Dark Magician, Exodia"
+        }
     }
     
     var body: some View {
@@ -191,7 +205,7 @@ struct AddCardView: View {
                     .foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)
                 
-                Text(vm.selectedTCG == .onePiece ? "Examples: Luffy, Zoro, Ace, Whitebeard" : "Examples: Pikachu, Charizard, Blastoise")
+                Text(searchExamples)
                     .font(.caption)
                     .foregroundStyle(.tertiary)
                     .padding(.top, 4)
@@ -411,6 +425,7 @@ struct AddCardView: View {
     private func clearSearchResults() {
         onePieceAPIService.searchResults = []
         pokemonAPIService.searchResults = []
+        yugiohAPIService.searchResults = []
     }
     
     private func addSelectedCard() {

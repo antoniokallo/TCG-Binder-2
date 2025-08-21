@@ -27,30 +27,6 @@ enum BackgroundType: String, CaseIterable, Identifiable {
     }
 }
 
-enum AppColorScheme: String, CaseIterable, Identifiable {
-    case system = "system"
-    case light = "light"
-    case dark = "dark"
-    
-    var id: String { self.rawValue }
-    
-    var displayName: String {
-        switch self {
-        case .system: return "System"
-        case .light: return "Light"
-        case .dark: return "Dark"
-        }
-    }
-    
-    var colorScheme: ColorScheme? {
-        switch self {
-        case .system: return nil
-        case .light: return .light
-        case .dark: return .dark
-        }
-    }
-}
-
 struct LandingView: View {
     @Binding var showBinder: Bool
     @Binding var selectedBackground: BackgroundType
@@ -60,9 +36,6 @@ struct LandingView: View {
     @State private var binderScale: CGFloat = 1.0
     @State private var titleOpacity: Double = 0.0
     @State private var subtitleOpacity: Double = 0.0
-    @State private var showProfile: Bool = false
-    @State private var showTCGSelection: Bool = false
-    @State private var showSettings: Bool = false
     @State private var isTransitioning: Bool = false
     
     var body: some View {
@@ -97,67 +70,7 @@ struct LandingView: View {
                 .scaleEffect(binderScale)
                 .animation(.spring(response: 0.5, dampingFraction: 0.7), value: binderScale)
                 
-                // Binder Name with profile and settings buttons
-                VStack(spacing: 2) {
-                    HStack(spacing: 8) {
-                        Text(vm.binderName)
-                            .font(.title.weight(.semibold))
-                            .foregroundStyle(.primary)
-                            .multilineTextAlignment(.center)
-                        
-                        Button {
-                            showProfile = true
-                        } label: {
-                            Image(systemName: "person.circle")
-                                .font(.title2)
-                                .foregroundStyle(.blue)
-                        }
-                        
-                        Button {
-                            showSettings = true
-                        } label: {
-                            Image(systemName: "gearshape")
-                                .font(.title2)
-                                .foregroundStyle(.blue)
-                        }
-                    }
-                    
-                    Text("\(vm.selectedBinder.displayName) • \(vm.selectedTCG.displayName)")
-                        .font(.subheadline)
-                        .foregroundStyle(.secondary)
-                }
-                .opacity(isTransitioning ? 0.0 : subtitleOpacity)
-                .animation(.easeOut(duration: 0.3), value: isTransitioning)
-                .padding(.top, 8)
                 
-                // TCG Selection Button
-                Button {
-                    showTCGSelection = true
-                } label: {
-                    HStack(spacing: 8) {
-                        Image(vm.selectedTCG.logoImageName)
-                            .resizable()
-                            .scaledToFit()
-                            .frame(width: 24, height: 24)
-                            .clipShape(Circle())
-                        
-                        Text("Change Game: \(vm.selectedTCG.displayName)")
-                            .font(.subheadline.weight(.medium))
-                        
-                        Image(systemName: "chevron.up")
-                            .font(.caption)
-                    }
-                    .foregroundStyle(.primary)
-                    .padding(.horizontal, 16)
-                    .padding(.vertical, 10)
-                    .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 12))
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 12)
-                            .stroke(.secondary.opacity(0.3), lineWidth: 1)
-                    )
-                }
-                .opacity(isTransitioning ? 0.0 : subtitleOpacity)
-                .animation(.easeOut(duration: 0.3), value: isTransitioning)
             }
             .padding(.top, -50)
         }
@@ -170,18 +83,6 @@ struct LandingView: View {
             withAnimation(.easeOut(duration: 0.6).delay(0.6)) {
                 subtitleOpacity = 1.0
             }
-        }
-        .sheet(isPresented: $showProfile) {
-            ProfileView(selectedBackground: selectedBackground)
-                .preferredColorScheme(selectedColorScheme.colorScheme)
-        }
-        .sheet(isPresented: $showTCGSelection) {
-            TCGSelectionView()
-                .preferredColorScheme(selectedColorScheme.colorScheme)
-        }
-        .sheet(isPresented: $showSettings) {
-            SettingsView(selectedBackground: $selectedBackground, selectedColorScheme: $selectedColorScheme)
-                .preferredColorScheme(selectedColorScheme.colorScheme)
         }
     }
     
@@ -282,7 +183,7 @@ struct TCGSelectionView: View {
 }
 
 // MARK: - Settings View
-struct SettingsView: View {
+struct LandingSettingsView: View {
     @Binding var selectedBackground: BackgroundType
     @Binding var selectedColorScheme: AppColorScheme
     @Environment(\.dismiss) private var dismiss
@@ -495,7 +396,7 @@ struct BinderCarouselView: View {
     @GestureState private var isLongPressing = false
     @State private var isTransforming: Bool = false
     
-    private let binders = BinderType.allCases
+    private var binders: [UserBinder] { vm.userBinders }
     private let binderWidth: CGFloat = 280
     private let binderSpacing: CGFloat = 80
     
@@ -504,18 +405,18 @@ struct BinderCarouselView: View {
             HStack {
                 Spacer()
                 ZStack {
-                    ForEach(Array(binders.enumerated()), id: \.offset) { index, binder in
+                    ForEach(Array(binders.enumerated()), id: \.offset) { index, userBinder in
                         BinderCard(
-                            binder: binder,
-                            isSelected: vm.selectedBinder == binder,
-                            isTransforming: isTransforming && vm.selectedBinder == binder,
+                            userBinder: userBinder,
+                            isSelected: vm.selectedUserBinder?.id == userBinder.id,
+                            isTransforming: isTransforming && vm.selectedUserBinder?.id == userBinder.id,
                             binderTransition: binderTransition,
                             onClick: {
-                                if vm.selectedBinder == binder {
+                                if vm.selectedUserBinder?.id == userBinder.id {
                                     // If already selected, start transformation with automatic navigation
                                     isTransforming = true
                                     isTransitioning = true
-                                    onExpansionTrigger(binder.color)
+                                    onExpansionTrigger(Color.black) // Use black as default color
                                     
                                     // Trigger navigation change immediately for automatic transition
                                     withAnimation(.easeInOut(duration: 0.6)) {
@@ -530,7 +431,7 @@ struct BinderCarouselView: View {
                                 } else {
                                     // If not selected, switch to this binder (circular navigation)
                                     withAnimation(.spring(response: 0.5, dampingFraction: 0.8)) {
-                                        vm.switchBinder(to: binder)
+                                        vm.selectUserBinder(userBinder)
                                         currentIndex = index
                                     }
                                 }
@@ -559,17 +460,17 @@ struct BinderCarouselView: View {
                         let shouldMoveLeft = value.translation.width < -threshold || velocity < -100
                         let shouldMoveRight = value.translation.width > threshold || velocity > 100
                         
-                        if shouldMoveRight {
+                        if shouldMoveRight && !binders.isEmpty {
                             // Swipe right - go to previous binder (circular)
                             withAnimation(.spring(response: 0.5, dampingFraction: 0.8)) {
                                 currentIndex = (currentIndex - 1 + binders.count) % binders.count
-                                vm.switchBinder(to: binders[currentIndex])
+                                vm.selectUserBinder(binders[currentIndex])
                             }
-                        } else if shouldMoveLeft {
+                        } else if shouldMoveLeft && !binders.isEmpty {
                             // Swipe left - go to next binder (circular)
                             withAnimation(.spring(response: 0.5, dampingFraction: 0.8)) {
                                 currentIndex = (currentIndex + 1) % binders.count
-                                vm.switchBinder(to: binders[currentIndex])
+                                vm.selectUserBinder(binders[currentIndex])
                             }
                         }
                         
@@ -582,7 +483,9 @@ struct BinderCarouselView: View {
         }
         .frame(height: 350)
         .onAppear {
-            currentIndex = binders.firstIndex(of: vm.selectedBinder) ?? 0
+            if let selectedBinder = vm.selectedUserBinder {
+                currentIndex = binders.firstIndex { $0.id == selectedBinder.id } ?? 0
+            }
         }
     }
     
@@ -601,7 +504,12 @@ struct BinderCarouselView: View {
     }
     
     private func offsetForBinder(at index: Int) -> CGFloat {
-        let selectedIndex = binders.firstIndex(of: vm.selectedBinder) ?? 0
+        let selectedIndex: Int
+        if let selectedBinder = vm.selectedUserBinder {
+            selectedIndex = binders.firstIndex { $0.id == selectedBinder.id } ?? 0
+        } else {
+            selectedIndex = 0
+        }
         let relativeIndex = circularDistance(from: selectedIndex, to: index, totalCount: binders.count)
         
         let spacing: CGFloat = 60
@@ -610,7 +518,12 @@ struct BinderCarouselView: View {
     }
     
     private func scaleForBinder(at index: Int) -> CGFloat {
-        let selectedIndex = binders.firstIndex(of: vm.selectedBinder) ?? 0
+        let selectedIndex: Int
+        if let selectedBinder = vm.selectedUserBinder {
+            selectedIndex = binders.firstIndex { $0.id == selectedBinder.id } ?? 0
+        } else {
+            selectedIndex = 0
+        }
         let relativeIndex = circularDistance(from: selectedIndex, to: index, totalCount: binders.count)
         let absRelativeIndex = abs(relativeIndex)
         
@@ -622,7 +535,12 @@ struct BinderCarouselView: View {
     }
     
     private func opacityForBinder(at index: Int) -> Double {
-        let selectedIndex = binders.firstIndex(of: vm.selectedBinder) ?? 0
+        let selectedIndex: Int
+        if let selectedBinder = vm.selectedUserBinder {
+            selectedIndex = binders.firstIndex { $0.id == selectedBinder.id } ?? 0
+        } else {
+            selectedIndex = 0
+        }
         let relativeIndex = circularDistance(from: selectedIndex, to: index, totalCount: binders.count)
         let absRelativeIndex = abs(relativeIndex)
         
@@ -634,7 +552,12 @@ struct BinderCarouselView: View {
     }
     
     private func yOffsetForBinder(at index: Int) -> CGFloat {
-        let selectedIndex = binders.firstIndex(of: vm.selectedBinder) ?? 0
+        let selectedIndex: Int
+        if let selectedBinder = vm.selectedUserBinder {
+            selectedIndex = binders.firstIndex { $0.id == selectedBinder.id } ?? 0
+        } else {
+            selectedIndex = 0
+        }
         let relativeIndex = circularDistance(from: selectedIndex, to: index, totalCount: binders.count)
         let absRelativeIndex = abs(relativeIndex)
         
@@ -646,7 +569,12 @@ struct BinderCarouselView: View {
     }
     
     private func zIndexForBinder(at index: Int) -> Double {
-        let selectedIndex = binders.firstIndex(of: vm.selectedBinder) ?? 0
+        let selectedIndex: Int
+        if let selectedBinder = vm.selectedUserBinder {
+            selectedIndex = binders.firstIndex { $0.id == selectedBinder.id } ?? 0
+        } else {
+            selectedIndex = 0
+        }
         let relativeIndex = circularDistance(from: selectedIndex, to: index, totalCount: binders.count)
         
         // Front binder has highest z-index, decreasing as we go back
@@ -655,7 +583,7 @@ struct BinderCarouselView: View {
 }
 
 struct BinderCard: View {
-    let binder: BinderType
+    let userBinder: UserBinder
     let isSelected: Bool
     let isTransforming: Bool
     let binderTransition: Namespace.ID
@@ -663,6 +591,24 @@ struct BinderCard: View {
     
     @State private var isPressed: Bool = false
     @State private var selectionScale: CGFloat = 1.0
+    
+    // Helper computed properties
+    private var binderColor: Color {
+        // Use the database color from the UserBinder model
+        return userBinder.color
+    }
+    
+    private var binderImageName: String {
+        let assignedValue = Int(userBinder.assigned_value)
+        let imageIndex = (assignedValue - 1) % 3 // Rotate through 3 images
+        
+        switch imageIndex {
+        case 0: return "binder2"
+        case 1: return "binder3"
+        case 2: return "binder2-black"
+        default: return "binder2"
+        }
+    }
     
     var body: some View {
         ZStack {
@@ -674,7 +620,7 @@ struct BinderCard: View {
             
             // Binder Base - zoom source for selected binder
             RoundedRectangle(cornerRadius: 20)
-                .fill(binder.color)
+                .fill(binderColor)
                 .frame(width: 280, height: 350)
                 .overlay(
                     RoundedRectangle(cornerRadius: 20)
@@ -685,21 +631,23 @@ struct BinderCard: View {
                 }
             
             // Binder Image
-            Image(binder.imageName)
+            Image(binderImageName)
                 .resizable()
                 .scaledToFit()
                 .frame(width: 260, height: 330)
                 .clipShape(RoundedRectangle(cornerRadius: 16))
             
-            // Selection indicator
-            if isSelected {
-                VStack {
-                    Spacer()
-                    Circle()
-                        .fill(Color.blue)
-                        .frame(width: 16, height: 16)
-                        .padding(.bottom, 20)
-                }
+            // Binder Name Label
+            VStack {
+                Spacer()
+                Text(userBinder.name)
+                    .font(.headline.weight(.bold))
+                    .foregroundColor(.white)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 8)
+                    .background(Color.black.opacity(0.7))
+                    .cornerRadius(8)
+                    .padding(.bottom, 20)
             }
         }
         .scaleEffect(isPressed ? 1.1 : (isSelected ? selectionScale : 1.0))

@@ -5,6 +5,8 @@
 //  Created by Edward Kogos on 8/15/25.
 //
 
+import Foundation
+
 struct Profile: Decodable {
   let username: String?
   let fullName: String?
@@ -57,6 +59,122 @@ struct CreateUserPokemonCardParams: Encodable {
 }
 
 struct UpdateUserPokemonCardQtyParams: Encodable {
+  let qty: Int
+  
+  enum CodingKeys: String, CodingKey {
+    case qty
+  }
+}
+
+// MARK: - YuGiOh Card Storage Models
+struct UserYuGiOhCard: Codable, Identifiable {
+  let id: Int?
+  let userId: String
+  let cardId: String
+  let qty: Int
+  
+  enum CodingKeys: String, CodingKey {
+    case id
+    case userId = "user_id"
+    case cardId = "card_id"
+    case qty
+  }
+}
+
+struct CreateUserYuGiOhCardParams: Encodable {
+  let userId: String
+  let cardId: String
+  let qty: Int
+  
+  enum CodingKeys: String, CodingKey {
+    case userId = "user_id"
+    case cardId = "card_id"
+    case qty
+  }
+}
+
+struct UpdateUserYuGiOhCardQtyParams: Encodable {
+  let qty: Int
+  
+  enum CodingKeys: String, CodingKey {
+    case qty
+  }
+}
+
+// MARK: - One Piece Card Storage Models
+struct UserOnePieceCard: Codable, Identifiable {
+  let id: Int?
+  let userId: String
+  let cardId: String
+  let qty: Int
+  
+  enum CodingKeys: String, CodingKey {
+    case id
+    case userId = "user_id"
+    case cardId = "card_id"
+    case qty
+  }
+}
+
+struct CreateUserOnePieceCardParams: Encodable {
+  let userId: String
+  let cardId: String
+  let qty: Int
+  
+  enum CodingKeys: String, CodingKey {
+    case userId = "user_id"
+    case cardId = "card_id"
+    case qty
+  }
+}
+
+struct UpdateUserOnePieceCardQtyParams: Encodable {
+  let qty: Int
+  
+  enum CodingKeys: String, CodingKey {
+    case qty
+  }
+}
+
+// MARK: - Binder-Specific Card Storage Models
+
+struct UserBinderCard: Codable, Identifiable {
+  let id: String? // This will be the database UUID primary key
+  let binderId: String
+  let cardId: String // This needs to be the card identifier, not UUID
+  let qty: Int
+  let notes: String?
+  let condition: String?
+  let addedAt: String?
+  
+  enum CodingKeys: String, CodingKey {
+    case id
+    case binderId = "binder_id"
+    case cardId = "card_id"
+    case qty
+    case notes
+    case condition
+    case addedAt = "added_at"
+  }
+}
+
+struct CreateUserBinderCardParams: Encodable {
+  let binderId: String
+  let cardId: String
+  let qty: Int
+  let notes: String?
+  let condition: String?
+  
+  enum CodingKeys: String, CodingKey {
+    case binderId = "binder_id"
+    case cardId = "card_id"
+    case qty
+    case notes
+    case condition
+  }
+}
+
+struct UpdateUserBinderCardQtyParams: Encodable {
   let qty: Int
   
   enum CodingKeys: String, CodingKey {

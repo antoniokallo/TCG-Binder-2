@@ -57,57 +57,153 @@ struct CardImageView: View {
 
 struct ContentView: View {
     @StateObject private var vm = BinderViewModel()
+    @StateObject private var navigationState = NavigationStateManager()
+    @State private var selectedTab = 0
+    @State private var showingAddBinder = false
     @State private var showBinder = false
-    @State private var selectedBackground: BackgroundType = .original
-    @State private var selectedColorScheme: AppColorScheme = .system
+    @AppStorage("selectedBackground") private var selectedBackground: BackgroundType = .potential
+    @AppStorage("appColorScheme") private var selectedColorScheme: AppColorScheme = .system
     @Namespace private var binderTransition
     
-    init() {
-        // Load saved background preference
-        let savedBackground = UserDefaults.standard.string(forKey: "selectedBackground") ?? "original"
-        _selectedBackground = State(initialValue: BackgroundType(rawValue: savedBackground) ?? .original)
-        
-        // Load saved color scheme preference
-        let savedColorScheme = UserDefaults.standard.string(forKey: "selectedColorScheme") ?? "system"
-        _selectedColorScheme = State(initialValue: AppColorScheme(rawValue: savedColorScheme) ?? .system)
-    }
-
     var body: some View {
-        NavigationStack {
-            if showBinder {
-                BinderMainView(
-                    showBinder: $showBinder, 
-                    selectedBackground: $selectedBackground,
-                    selectedColorScheme: $selectedColorScheme,
-                    binderTransition: binderTransition
-                )
-                .environmentObject(vm)
-                .navigationTransition(.zoom(sourceID: "selectedBinder", in: binderTransition))
-                .onChange(of: selectedBackground) { _, newValue in
-                    UserDefaults.standard.set(newValue.rawValue, forKey: "selectedBackground")
-                }
-                .onChange(of: selectedColorScheme) { _, newValue in
-                    UserDefaults.standard.set(newValue.rawValue, forKey: "selectedColorScheme")
-                }
-            } else {
-                LandingView(
-                    showBinder: $showBinder, 
-                    selectedBackground: $selectedBackground,
-                    selectedColorScheme: $selectedColorScheme,
-                    binderTransition: binderTransition
-                )
-                .environmentObject(vm)
-                .navigationTransition(.zoom(sourceID: "selectedBinder", in: binderTransition))
-                .onChange(of: selectedBackground) { _, newValue in
-                    UserDefaults.standard.set(newValue.rawValue, forKey: "selectedBackground")
-                }
-                .onChange(of: selectedColorScheme) { _, newValue in
-                    UserDefaults.standard.set(newValue.rawValue, forKey: "selectedColorScheme")
+        // Main TabView with navbar
+        TabView(selection: $selectedTab) {
+            // Home Tab - Landing/Binder View
+            NavigationStack {
+                if showBinder {
+                    BinderMainView(
+                        showBinder: $showBinder, 
+                        selectedBackground: $selectedBackground,
+                        selectedColorScheme: $selectedColorScheme,
+                        binderTransition: binderTransition
+                    )
+                    .environmentObject(vm)
+                    .navigationTransition(.zoom(sourceID: "selectedBinder", in: binderTransition))
+                } else {
+                    LandingView(
+                        showBinder: $showBinder,
+                        selectedBackground: $selectedBackground,
+                        selectedColorScheme: $selectedColorScheme,
+                        binderTransition: binderTransition
+                    )
+                    .environmentObject(vm)
+                    .navigationTransition(.zoom(sourceID: "selectedBinder", in: binderTransition))
                 }
             }
+            .tabItem {
+                Image(systemName: "house")
+                Text("Home")
+            }
+            .tag(0)
+            .onChange(of: selectedTab) { oldValue, newValue in
+                // When home tab is tapped, always go back to landing page
+                if newValue == 0 && showBinder {
+                    withAnimation(.easeInOut(duration: 0.6)) {
+                        showBinder = false
+                    }
+                }
+            }
+            
+            // Friends Tab
+            NavigationStack {
+                FriendsView()
+            }
+            .tabItem {
+                Image(systemName: "person.2")
+                Text("Friends")
+            }
+            .badge(2) // Example badge for friend requests
+            .tag(1)
+            
+            // Hidden Add Tab (handled by floating button)
+            Color.clear
+                .tabItem {
+                    Image(systemName: "plus.circle")
+                    Text("Add")
+                }
+                .tag(2)
+            
+            // Profile Tab
+            NavigationStack {
+                MainProfileView()
+                    .environmentObject(vm)
+            }
+            .tabItem {
+                Image(systemName: "person.crop.circle")
+                Text("Profile")
+            }
+            .tag(3)
+            
+            // Settings Tab
+            NavigationStack {
+                EnhancedSettingsView()
+                    .environmentObject(vm)
+            }
+            .tabItem {
+                Image(systemName: "gearshape")
+                Text("Settings")
+            }
+            .tag(4)
+        }
+        .opacity(navigationState.shouldShowTabBar ? 1 : 0)
+        .onAppear {
+            setupTabBarAppearance()
+        }
+        .environment(\.navigationState, navigationState)
+        .environmentObject(vm)
+        .overlay(
+            // Floating Add Button
+            VStack {
+                Spacer()
+                HStack {
+                    Spacer()
+                    
+                    // Center the button over the middle tab
+                    if navigationState.shouldShowTabBar {
+                        FloatingAddButton {
+                            navigationState.enterFullScreenMode()
+                            showingAddBinder = true
+                        }
+                    }
+                    
+                    Spacer()
+                }
+                .padding(.bottom, 25) // Position above tab bar
+            }
+            .transition(.scale.combined(with: .opacity))
+        )
+        .sheet(isPresented: $showingAddBinder) {
+            AddBinderView()
+                .environmentObject(vm)
+                .onDisappear {
+                    navigationState.exitFullScreenMode()
+                }
         }
         .preferredColorScheme(selectedColorScheme.colorScheme)
         .animation(.easeInOut(duration: 0.6), value: showBinder)
+    }
+    
+    private func setupTabBarAppearance() {
+        let appearance = UITabBarAppearance()
+        
+        // Configure blur effect
+        appearance.configureWithTransparentBackground()
+        appearance.backgroundColor = UIColor.systemBackground.withAlphaComponent(0.8)
+        
+        // Configure selected state
+        appearance.stackedLayoutAppearance.selected.iconColor = UIColor.systemBlue
+        appearance.stackedLayoutAppearance.selected.titleTextAttributes = [
+            .foregroundColor: UIColor.systemBlue
+        ]
+        
+        // Configure normal state
+        appearance.stackedLayoutAppearance.normal.iconColor = UIColor.secondaryLabel
+        appearance.stackedLayoutAppearance.normal.titleTextAttributes = [
+            .foregroundColor: UIColor.secondaryLabel
+        ]
+        
+        UITabBar.appearance().standardAppearance = appearance
+        UITabBar.appearance().scrollEdgeAppearance = appearance
     }
 }
 
@@ -115,7 +211,7 @@ struct BinderMainView: View {
     @EnvironmentObject var vm: BinderViewModel
     @State private var showAddCard = false
     @State private var showNameEditor = false
-    @State private var showProfile = false
+    @State private var showDeleteConfirmation = false
     @State private var tempBinderName = ""
     @Binding var showBinder: Bool
     @Binding var selectedBackground: BackgroundType
@@ -128,12 +224,17 @@ struct BinderMainView: View {
             BinderDynamicBackground(binderColor: vm.selectedBinder.color)
                 .onAppear {
                     Task {
-                        await vm.loadPokemonCardsIfNeeded()
+                        await vm.loadCardsIfNeeded()
                     }
                 }
                 .onChange(of: vm.selectedTCG) { oldValue, newValue in
                     Task {
-                        await vm.loadPokemonCardsIfNeeded()
+                        await vm.loadCardsIfNeeded()
+                    }
+                }
+                .onChange(of: vm.selectedUserBinder) { oldValue, newValue in
+                    Task {
+                        await vm.loadCardsIfNeeded()
                     }
                 }
             
@@ -193,9 +294,20 @@ struct BinderMainView: View {
                 .environmentObject(vm)
                 .preferredColorScheme(selectedColorScheme.colorScheme)
         }
-        .sheet(isPresented: $showProfile) {
-            ProfileView(selectedBackground: selectedBackground)
-                .preferredColorScheme(selectedColorScheme.colorScheme)
+        .alert("Delete Binder", isPresented: $showDeleteConfirmation) {
+            Button("Cancel", role: .cancel) { }
+            Button("Delete", role: .destructive) {
+                Task {
+                    do {
+                        try await vm.deleteCurrentBinder()
+                        showBinder = false // Go back to home after deletion
+                    } catch {
+                        print("❌ Failed to delete binder: \(error)")
+                    }
+                }
+            }
+        } message: {
+            Text("Are you sure you want to delete this binder? This will permanently delete the binder and all its cards.")
         }
         .alert("Edit Binder Name", isPresented: $showNameEditor) {
             TextField("Binder Name", text: $tempBinderName)
@@ -251,11 +363,11 @@ struct BinderMainView: View {
                 }
                 
                 Button {
-                    showProfile = true
+                    showDeleteConfirmation = true
                 } label: {
-                    Image(systemName: "person.circle")
+                    Image(systemName: "trash")
                         .font(.title3)
-                        .foregroundStyle(.blue)
+                        .foregroundStyle(.red)
                 }
             }
         }
@@ -736,6 +848,411 @@ struct PastelPaperBackground: View {
                 .opacity(0.35)
             }
         )
+    }
+}
+
+// MARK: - Navbar Components
+
+struct FloatingAddButton: View {
+    let action: () -> Void
+    @Environment(\.colorScheme) var colorScheme
+    @State private var isPressed = false
+    
+    var body: some View {
+        Button(action: action) {
+            ZStack {
+                // Background with blur and gradient
+                Circle()
+                    .fill(.ultraThinMaterial)
+                    .overlay(
+                        Circle()
+                            .stroke(
+                                LinearGradient(
+                                    colors: [.blue.opacity(0.3), .purple.opacity(0.2)],
+                                    startPoint: .topLeading,
+                                    endPoint: .bottomTrailing
+                                ),
+                                lineWidth: 1
+                            )
+                    )
+                    .frame(width: 56, height: 56)
+                    .shadow(
+                        color: .black.opacity(colorScheme == .dark ? 0.4 : 0.2),
+                        radius: isPressed ? 4 : 8,
+                        x: 0,
+                        y: isPressed ? 2 : 4
+                    )
+                
+                // Plus icon with animation
+                Image(systemName: "plus")
+                    .font(.title2.weight(.semibold))
+                    .foregroundStyle(
+                        LinearGradient(
+                            colors: [.blue, .purple],
+                            startPoint: .topLeading,
+                            endPoint: .bottomTrailing
+                        )
+                    )
+                    .scaleEffect(isPressed ? 0.9 : 1.0)
+                    .rotationEffect(.degrees(isPressed ? 45 : 0))
+            }
+        }
+        .scaleEffect(isPressed ? 0.95 : 1.0)
+        .onLongPressGesture(minimumDuration: 0, maximumDistance: .infinity) { 
+            withAnimation(.easeInOut(duration: 0.1)) {
+                isPressed = true
+            }
+        } onPressingChanged: { pressing in
+            if !pressing {
+                withAnimation(.easeInOut(duration: 0.1)) {
+                    isPressed = false
+                }
+            }
+        }
+        .buttonStyle(PlainButtonStyle())
+    }
+}
+
+struct FriendsView: View {
+    var body: some View {
+        NavigationView {
+            VStack(spacing: 20) {
+                Image(systemName: "person.2.circle")
+                    .font(.system(size: 80))
+                    .foregroundColor(.secondary)
+                
+                Text("Friends")
+                    .font(.largeTitle.weight(.bold))
+                
+                Text("Connect with other collectors")
+                    .font(.body)
+                    .foregroundColor(.secondary)
+                    .multilineTextAlignment(.center)
+                
+                // Example badge functionality
+                HStack {
+                    Image(systemName: "bell.badge")
+                        .foregroundColor(.red)
+                    Text("2 new friend requests")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
+                .padding()
+                .background(.ultraThinMaterial)
+                .cornerRadius(12)
+            }
+            .padding()
+            .navigationTitle("Friends")
+            .navigationBarTitleDisplayMode(.large)
+        }
+    }
+}
+
+struct MainProfileView: View {
+    @EnvironmentObject var vm: BinderViewModel
+    @AppStorage("selectedBackground") private var selectedBackground: BackgroundType = .potential
+    @State private var showFullProfile = false
+    
+    var body: some View {
+        NavigationView {
+            VStack(spacing: 24) {
+                // Profile Picture
+                Image(systemName: "person.crop.circle.fill")
+                    .font(.system(size: 100))
+                    .foregroundColor(.blue)
+                
+                VStack(spacing: 8) {
+                    Text("TCG Collector")
+                        .font(.title.weight(.bold))
+                    
+                    Text("Total Binders: \(vm.userBinders.count)")
+                        .font(.subheadline)
+                        .foregroundColor(.secondary)
+                }
+                
+                // Current Binder Info
+                if let selectedBinder = vm.selectedUserBinder {
+                    VStack(spacing: 12) {
+                        Text("Current Binder")
+                            .font(.headline)
+                            .foregroundColor(.secondary)
+                        
+                        HStack {
+                            Circle()
+                                .fill(selectedBinder.color)
+                                .frame(width: 20, height: 20)
+                            
+                            Text(selectedBinder.name)
+                                .font(.title3.weight(.medium))
+                            
+                            if let game = selectedBinder.game {
+                                Text("(\(TCGType(rawValue: game)?.displayName ?? "Unknown"))")
+                                    .font(.caption)
+                                    .foregroundColor(.secondary)
+                            }
+                        }
+                    }
+                    .padding()
+                    .background(.ultraThinMaterial)
+                    .cornerRadius(12)
+                }
+                
+                // Stats
+                HStack(spacing: 40) {
+                    StatView(title: "Cards", value: "\(vm.sets.flatMap { $0.cards }.count)")
+                    StatView(title: "Sets", value: "\(vm.sets.count)")
+                    StatView(title: "Binders", value: "\(vm.userBinders.count)")
+                }
+                .padding()
+                .background(.ultraThinMaterial)
+                .cornerRadius(16)
+                
+                // Profile Actions
+                Button("Manage Account") {
+                    showFullProfile = true
+                }
+                .font(.headline)
+                .foregroundColor(.white)
+                .frame(maxWidth: .infinity)
+                .padding()
+                .background(Color.blue)
+                .cornerRadius(12)
+                
+                Spacer()
+            }
+            .padding()
+            .navigationTitle("Profile")
+            .navigationBarTitleDisplayMode(.large)
+        }
+        .sheet(isPresented: $showFullProfile) {
+            ProfileView(selectedBackground: selectedBackground)
+        }
+    }
+}
+
+struct StatView: View {
+    let title: String
+    let value: String
+    
+    var body: some View {
+        VStack(spacing: 4) {
+            Text(value)
+                .font(.title2.weight(.bold))
+                .foregroundColor(.primary)
+            
+            Text(title)
+                .font(.caption)
+                .foregroundColor(.secondary)
+        }
+    }
+}
+
+
+struct AddBinderView: View {
+    @EnvironmentObject var vm: BinderViewModel
+    @Environment(\.dismiss) var dismiss
+    @State private var binderName = ""
+    @State private var selectedColor = Color.black
+    @State private var selectedTCG = TCGType.onePiece
+    @State private var isCreating = false
+    @State private var showingError = false
+    @State private var errorMessage = ""
+    
+    private let binderColors: [(name: String, color: Color)] = [
+        ("Black", Color.black),
+        ("Blue", Color.blue),
+        ("Red", Color.red),
+        ("Green", Color.green),
+        ("Purple", Color.purple),
+        ("Orange", Color.orange)
+    ]
+    
+    var body: some View {
+        NavigationView {
+            ScrollView {
+                VStack(spacing: 24) {
+                    // Header
+                    VStack(spacing: 8) {
+                        Image(systemName: "plus.circle.fill")
+                            .font(.system(size: 60))
+                            .foregroundStyle(
+                                LinearGradient(
+                                    colors: [.blue, .purple],
+                                    startPoint: .topLeading,
+                                    endPoint: .bottomTrailing
+                                )
+                            )
+                        
+                        Text("Create New Binder")
+                            .font(.largeTitle.weight(.bold))
+                        
+                        Text("Add a new binder to organize your collection")
+                            .font(.body)
+                            .foregroundColor(.secondary)
+                            .multilineTextAlignment(.center)
+                    }
+                    
+                    VStack(spacing: 20) {
+                        // Binder Name Input
+                        VStack(alignment: .leading, spacing: 8) {
+                            Text("Binder Name")
+                                .font(.headline)
+                            
+                            TextField("Enter binder name", text: $binderName)
+                                .textFieldStyle(RoundedBorderTextFieldStyle())
+                                .font(.body)
+                        }
+                        
+                        // TCG Selection
+                        VStack(alignment: .leading, spacing: 12) {
+                            Text("Choose Trading Card Game")
+                                .font(.headline)
+                            
+                            VStack(spacing: 12) {
+                                ForEach(TCGType.allCases, id: \.self) { tcgType in
+                                    Button {
+                                        selectedTCG = tcgType
+                                    } label: {
+                                        HStack(spacing: 12) {
+                                            // TCG Logo
+                                            Image(tcgType.logoImageName)
+                                                .resizable()
+                                                .scaledToFit()
+                                                .frame(width: 40, height: 40)
+                                                .clipShape(Circle())
+                                            
+                                            // TCG Name
+                                            Text(tcgType.displayName)
+                                                .font(.body.weight(.medium))
+                                                .foregroundStyle(.primary)
+                                            
+                                            Spacer()
+                                            
+                                            // Selection indicator
+                                            if selectedTCG == tcgType {
+                                                Image(systemName: "checkmark.circle.fill")
+                                                    .font(.title3)
+                                                    .foregroundStyle(.blue)
+                                            } else {
+                                                Image(systemName: "circle")
+                                                    .font(.title3)
+                                                    .foregroundStyle(.secondary)
+                                            }
+                                        }
+                                        .padding(.horizontal, 16)
+                                        .padding(.vertical, 12)
+                                        .background {
+                                            RoundedRectangle(cornerRadius: 12)
+                                                .fill(.ultraThinMaterial)
+                                        }
+                                        .overlay {
+                                            RoundedRectangle(cornerRadius: 12)
+                                                .stroke(selectedTCG == tcgType ? .blue : .clear, lineWidth: 2)
+                                        }
+                                    }
+                                    .buttonStyle(PlainButtonStyle())
+                                }
+                            }
+                        }
+                        
+                        // Color Selection
+                        VStack(alignment: .leading, spacing: 12) {
+                            Text("Choose Color")
+                                .font(.headline)
+                            
+                            LazyVGrid(columns: Array(repeating: GridItem(.flexible()), count: 3), spacing: 16) {
+                                ForEach(Array(binderColors.enumerated()), id: \.offset) { index, colorOption in
+                                    Button {
+                                        selectedColor = colorOption.color
+                                    } label: {
+                                        VStack(spacing: 8) {
+                                            Circle()
+                                                .fill(colorOption.color)
+                                                .frame(width: 50, height: 50)
+                                                .overlay(
+                                                    Circle()
+                                                        .stroke(selectedColor == colorOption.color ? Color.blue : Color.clear, lineWidth: 3)
+                                                )
+                                                .overlay(
+                                                    Circle()
+                                                        .stroke(Color.primary.opacity(0.2), lineWidth: 1)
+                                                )
+                                            
+                                            Text(colorOption.name)
+                                                .font(.caption)
+                                                .foregroundColor(.primary)
+                                        }
+                                    }
+                                    .buttonStyle(PlainButtonStyle())
+                                }
+                            }
+                        }
+                        
+                        // Create Button
+                        Button {
+                            createBinder()
+                        } label: {
+                            HStack {
+                                if isCreating {
+                                    ProgressView()
+                                        .scaleEffect(0.8)
+                                        .foregroundColor(.white)
+                                } else {
+                                    Image(systemName: "plus")
+                                }
+                                Text(isCreating ? "Creating..." : "Create Binder")
+                            }
+                            .font(.headline)
+                            .foregroundColor(.white)
+                            .frame(maxWidth: .infinity)
+                            .padding()
+                            .background(
+                                RoundedRectangle(cornerRadius: 12)
+                                    .fill(binderName.isEmpty ? Color.gray : Color.blue)
+                            )
+                        }
+                        .disabled(binderName.isEmpty || isCreating)
+                    }
+                    .padding(.horizontal)
+                }
+                .padding()
+            }
+            .navigationTitle("New Binder")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .navigationBarLeading) {
+                    Button("Cancel") {
+                        dismiss()
+                    }
+                }
+            }
+            .alert("Error", isPresented: $showingError) {
+                Button("OK") { }
+            } message: {
+                Text(errorMessage)
+            }
+        }
+    }
+    
+    private func createBinder() {
+        guard !binderName.isEmpty else { return }
+        
+        isCreating = true
+        
+        Task {
+            do {
+                try await vm.createNewBinder(name: binderName, color: selectedColor, game: selectedTCG)
+                await MainActor.run {
+                    dismiss()
+                }
+            } catch {
+                await MainActor.run {
+                    errorMessage = error.localizedDescription
+                    showingError = true
+                    isCreating = false
+                }
+            }
+        }
     }
 }
 
