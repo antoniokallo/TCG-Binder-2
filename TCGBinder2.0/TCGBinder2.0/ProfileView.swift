@@ -6,14 +6,21 @@
 //
 
 import SwiftUI
+import PhotosUI
 
 struct ProfileView: View {
   @State var username = ""
   @State var fullName = ""
   @State var website = ""
+  @State var bio = ""
   @State var userEmail = ""
+  @State var avatarUrl = ""
   @State var isLoading = false
   @State var isUpdating = false
+  @State var showingImagePicker = false
+  @State var selectedPhoto: PhotosPickerItem?
+  @State var profileImage: UIImage?
+  @StateObject private var profileService = ProfileService()
   @Environment(\.dismiss) private var dismiss
   let selectedBackground: BackgroundType
 
@@ -52,30 +59,74 @@ struct ProfileView: View {
     .task {
       await getInitialProfile()
     }
+    .photosPicker(isPresented: $showingImagePicker, selection: $selectedPhoto, matching: .images)
+    .onChange(of: selectedPhoto) { oldValue, newValue in
+      Task {
+        await loadSelectedPhoto()
+      }
+    }
   }
   
   private var profileHeader: some View {
     VStack(spacing: 16) {
-      // Profile Photo Placeholder
-      ZStack {
-        Circle()
-          .fill(Color("BinderGreen").opacity(0.3))
-          .frame(width: 100, height: 100)
-        
-        if fullName.isEmpty && username.isEmpty {
-          Image(systemName: "person.fill")
-            .font(.system(size: 40))
-            .foregroundStyle(.secondary)
-        } else {
-          Text(profileInitials)
-            .font(.system(size: 36, weight: .medium))
-            .foregroundStyle(.primary)
+      // Profile Photo
+      Button {
+        showingImagePicker = true
+      } label: {
+        ZStack {
+          Circle()
+            .fill(Color("BinderGreen").opacity(0.3))
+            .frame(width: 100, height: 100)
+          
+          if let profileImage {
+            Image(uiImage: profileImage)
+              .resizable()
+              .aspectRatio(contentMode: .fill)
+              .frame(width: 100, height: 100)
+              .clipShape(Circle())
+          } else if !avatarUrl.isEmpty {
+            AsyncImage(url: URL(string: avatarUrl)) { image in
+              image
+                .resizable()
+                .aspectRatio(contentMode: .fill)
+                .frame(width: 100, height: 100)
+                .clipShape(Circle())
+            } placeholder: {
+              Circle()
+                .fill(Color("BinderGreen").opacity(0.3))
+                .frame(width: 100, height: 100)
+                .overlay(
+                  ProgressView()
+                    .tint(.white)
+                )
+            }
+          } else if fullName.isEmpty && username.isEmpty {
+            Image(systemName: "person.fill")
+              .font(.system(size: 40))
+              .foregroundStyle(.secondary)
+          } else {
+            Text(profileInitials)
+              .font(.system(size: 36, weight: .medium))
+              .foregroundStyle(.primary)
+          }
+          
+          // Camera overlay
+          Circle()
+            .fill(Color.black.opacity(0.3))
+            .frame(width: 100, height: 100)
+            .overlay(
+              Image(systemName: "camera.fill")
+                .font(.system(size: 20))
+                .foregroundColor(.white)
+                .opacity(0.8)
+            )
+            .opacity(profileImage != nil || !avatarUrl.isEmpty ? 0.7 : 1.0)
         }
+        .overlay(
+          Circle()
+            .stroke(Color.black.opacity(0.1), lineWidth: 2)
+        )
       }
-      .overlay(
-        Circle()
-          .stroke(Color.black.opacity(0.1), lineWidth: 2)
-      )
       
       VStack(spacing: 4) {
         Text(displayName)
@@ -111,6 +162,13 @@ struct ProfileView: View {
         title: "Website",
         value: $website,
         placeholder: "Enter website URL"
+      )
+      
+      InfoCard(
+        icon: "text.quote",
+        title: "Bio",
+        value: $bio,
+        placeholder: "Tell us about yourself"
       )
     }
   }
@@ -204,19 +262,21 @@ struct ProfileView: View {
         self.userEmail = currentUser.email ?? "No email"
       }
 
-      let profile: Profile =
-      try await supabase
-        .from("profiles")
-        .select()
-        .eq("id", value: currentUser.id)
-        .single()
-        .execute()
-        .value
+      // Ensure profile exists
+      try await profileService.createProfileIfNeeded(
+        userId: currentUser.id.uuidString,
+        email: currentUser.email ?? ""
+      )
+
+      // Load profile
+      let profile = try await profileService.loadProfile(userId: currentUser.id.uuidString)
 
       await MainActor.run {
         self.username = profile.username ?? ""
         self.fullName = profile.fullName ?? ""
         self.website = profile.website ?? ""
+        self.bio = profile.bio ?? ""
+        self.avatarUrl = profile.avatarUrl ?? ""
       }
 
     } catch {
@@ -237,22 +297,56 @@ struct ProfileView: View {
       do {
         let currentUser = try await supabase.auth.session.user
 
-        try await supabase
-          .from("profiles")
-          .update(
-            UpdateProfileParams(
-              username: username.trimmingCharacters(in: .whitespacesAndNewlines),
-              fullName: fullName.trimmingCharacters(in: .whitespacesAndNewlines),
-              website: website.trimmingCharacters(in: .whitespacesAndNewlines)
-            )
-          )
-          .eq("id", value: currentUser.id)
-          .execute()
+        try await profileService.updateProfile(
+          userId: currentUser.id.uuidString,
+          username: username,
+          fullName: fullName,
+          website: website,
+          bio: bio,
+          avatarUrl: avatarUrl.isEmpty ? nil : avatarUrl
+        )
           
         debugPrint("Profile updated successfully")
       } catch {
         debugPrint("Error updating profile: \(error)")
       }
+    }
+  }
+  
+  private func loadSelectedPhoto() async {
+    guard let selectedPhoto else { return }
+    
+    do {
+      if let data = try await selectedPhoto.loadTransferable(type: Data.self) {
+        if let image = UIImage(data: data) {
+          await MainActor.run {
+            self.profileImage = image
+          }
+          
+          // Upload the photo
+          let currentUser = try await supabase.auth.session.user
+          let imageData = image.jpegData(compressionQuality: 0.8) ?? Data()
+          
+          let uploadedUrl = try await profileService.uploadProfilePhoto(
+            userId: currentUser.id.uuidString,
+            imageData: imageData
+          )
+          
+          await MainActor.run {
+            self.avatarUrl = uploadedUrl
+          }
+          
+          // Update profile with new avatar URL
+          try await profileService.updateAvatarUrl(
+            userId: currentUser.id.uuidString,
+            avatarUrl: uploadedUrl
+          )
+          
+          debugPrint("Profile photo uploaded successfully: \(uploadedUrl)")
+        }
+      }
+    } catch {
+      debugPrint("Error loading selected photo: \(error)")
     }
   }
 }

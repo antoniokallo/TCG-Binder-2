@@ -6,7 +6,7 @@ enum AuthMethod: String, CaseIterable { case password = "Password", link = "Emai
 
 struct AuthView: View {
   @State private var mode: AuthMode = .signIn
-  @State private var method: AuthMethod = .password
+  private let method: AuthMethod = .password // Always use password method
 
   @State private var email = ""
   @State private var password = ""
@@ -16,49 +16,154 @@ struct AuthView: View {
   @State private var message: String?
 
   var body: some View {
-    Form {
-      // Toggles
-      Section {
-        Picker("Mode", selection: $mode) {
-          ForEach(AuthMode.allCases, id: \.self) { Text($0.rawValue).tag($0) }
-        }.pickerStyle(.segmented)
-
-        Picker("Method", selection: $method) {
-          ForEach(AuthMethod.allCases, id: \.self) { Text($0.rawValue).tag($0) }
-        }.pickerStyle(.segmented)
-      }
-
-      // Fields
-      Section {
-        TextField("Email", text: $email)
-          .textContentType(.emailAddress)
-          .textInputAutocapitalization(.never)
-          .autocorrectionDisabled()
-
-        if method == .password {
-          SecureField("Password (min 6)", text: $password)
-            .textContentType(.password)
+    ZStack {
+      // Background to match the app
+      LinearGradient(
+        gradient: Gradient(colors: [Color.black.opacity(0.8), Color.blue.opacity(0.6)]),
+        startPoint: .topLeading,
+        endPoint: .bottomTrailing
+      )
+      .ignoresSafeArea()
+      
+      // Main content
+      ScrollView {
+        VStack(spacing: 32) {
+          Spacer(minLength: 60)
+          
+          // App Logo
+          Image("tcg-binder-title")
+            .resizable()
+            .scaledToFit()
+            .frame(height: 80)
+            .padding(.horizontal, 40)
+          
+          VStack(spacing: 24) {
+            // Mode Toggle
+            VStack(spacing: 12) {
+              Text("Choose Action")
+                .font(.headline)
+                .foregroundColor(.white)
+              
+              Picker("Mode", selection: $mode) {
+                ForEach(AuthMode.allCases, id: \.self) { Text($0.rawValue).tag($0) }
+              }
+              .pickerStyle(.segmented)
+              .padding(.horizontal, 20)
+            }
+            
+            
+            // Input Fields
+            VStack(spacing: 16) {
+              // Email Field
+              VStack(alignment: .leading, spacing: 8) {
+                Text("Email Address")
+                  .font(.subheadline)
+                  .foregroundColor(.white.opacity(0.8))
+                
+                TextField("Enter your email", text: $email)
+                  .textContentType(.emailAddress)
+                  .textInputAutocapitalization(.never)
+                  .autocorrectionDisabled()
+                  .padding(.horizontal, 16)
+                  .padding(.vertical, 12)
+                  .background(Color.white.opacity(0.1))
+                  .cornerRadius(12)
+                  .overlay(
+                    RoundedRectangle(cornerRadius: 12)
+                      .stroke(Color.white.opacity(0.3), lineWidth: 1)
+                  )
+              }
+              
+              // Password Field
+              VStack(alignment: .leading, spacing: 8) {
+                Text("Password")
+                  .font(.subheadline)
+                  .foregroundColor(.white.opacity(0.8))
+                
+                SecureField("Enter password (min 6 characters)", text: $password)
+                  .textContentType(.password)
+                  .padding(.horizontal, 16)
+                  .padding(.vertical, 12)
+                  .background(Color.white.opacity(0.1))
+                  .cornerRadius(12)
+                  .overlay(
+                    RoundedRectangle(cornerRadius: 12)
+                      .stroke(Color.white.opacity(0.3), lineWidth: 1)
+                  )
+              }
+              
+              // Username Field
+              if mode == .register {
+                VStack(alignment: .leading, spacing: 8) {
+                  Text("Username")
+                    .font(.subheadline)
+                    .foregroundColor(.white.opacity(0.8))
+                  
+                  TextField("Choose a username", text: $username)
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 12)
+                    .background(Color.white.opacity(0.1))
+                    .cornerRadius(12)
+                    .overlay(
+                      RoundedRectangle(cornerRadius: 12)
+                        .stroke(Color.white.opacity(0.3), lineWidth: 1)
+                    )
+                }
+              }
+            }
+            .padding(.horizontal, 20)
+            
+            // Action Button
+            VStack(spacing: 16) {
+              Button(action: { Task { await go() } }) {
+                HStack {
+                  if isLoading {
+                    ProgressView()
+                      .progressViewStyle(CircularProgressViewStyle(tint: .white))
+                      .scaleEffect(0.8)
+                  }
+                  Text(ctaTitle)
+                    .font(.headline)
+                    .fontWeight(.semibold)
+                }
+                .foregroundColor(.white)
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 16)
+                .background(
+                  LinearGradient(
+                    gradient: Gradient(colors: canSubmit && !isLoading ? 
+                      [Color.blue, Color.purple] : 
+                      [Color.gray.opacity(0.5), Color.gray.opacity(0.3)]
+                    ),
+                    startPoint: .leading,
+                    endPoint: .trailing
+                  )
+                )
+                .cornerRadius(12)
+                .shadow(color: .black.opacity(0.3), radius: 8, x: 0, y: 4)
+              }
+              .disabled(!canSubmit || isLoading)
+              .padding(.horizontal, 20)
+              
+              // Message Display
+              if let message {
+                Text(message)
+                  .font(.subheadline)
+                  .foregroundColor(.white.opacity(0.9))
+                  .multilineTextAlignment(.center)
+                  .padding(.horizontal, 20)
+                  .padding(.vertical, 12)
+                  .background(Color.white.opacity(0.1))
+                  .cornerRadius(8)
+                  .padding(.horizontal, 20)
+              }
+            }
+          }
+          
+          Spacer(minLength: 40)
         }
-
-        if mode == .register && method == .password {
-          TextField("Username", text: $username)
-            .textInputAutocapitalization(.never)
-            .autocorrectionDisabled()
-        }
-      }
-
-      // Action
-      Section {
-        Button(action: { Task { await go() } }) {
-          Text(ctaTitle)
-        }
-        .disabled(!canSubmit || isLoading)
-
-        if isLoading { ProgressView() }
-      }
-
-      if let message {
-        Section { Text(message).font(.footnote).foregroundColor(.secondary) }
       }
     }
   }
@@ -66,20 +171,16 @@ struct AuthView: View {
   // MARK: - Helpers
 
   private var ctaTitle: String {
-    switch (mode, method) {
-    case (.signIn, .password):   return "Sign in with Password"
-    case (.register, .password): return "Create Account"
-    case (.signIn, .link):       return "Send Magic Link"
-    case (.register, .link):     return "Send Registration Link"
+    switch mode {
+    case .signIn:   return "Sign In"
+    case .register: return "Create Account"
     }
   }
 
   private var canSubmit: Bool {
     guard !email.isEmpty else { return false }
-    if method == .password {
-      if password.count < 6 { return false }
-      if mode == .register && username.trimmingCharacters(in: .whitespaces).isEmpty { return false }
-    }
+    if password.count < 6 { return false }
+    if mode == .register && username.trimmingCharacters(in: .whitespaces).isEmpty { return false }
     return true
   }
 
@@ -87,18 +188,12 @@ struct AuthView: View {
     isLoading = true; defer { isLoading = false }
     message = nil
 
-    switch (mode, method) {
-    case (.signIn, .password):
+    switch mode {
+    case .signIn:
       await signInWithPassword()
 
-    case (.register, .password):
+    case .register:
       await registerWithPassword()
-
-    case (.signIn, .link):
-      await sendMagicLink(createUser: false)
-
-    case (.register, .link):
-      await sendMagicLink(createUser: true)
     }
   }
 
@@ -144,19 +239,5 @@ struct AuthView: View {
     }
   }
 
-  /// Magic-link flow (works for both sign-in and register).
-  private func sendMagicLink(createUser: Bool) async {
-    do {
-      try await supabase.auth.signInWithOTP(
-        email: email,
-        redirectTo: URL(string: "tcgbinder://auth-callback")!
-      )
-      // NOTE: Older Swift SDK doesn't expose shouldCreateUser; Supabase will create
-      // the account on first confirmation if it doesn't exist.
-      message = "Check your email for the link."
-    } catch {
-      message = error.localizedDescription
-    }
-  }
 }
 

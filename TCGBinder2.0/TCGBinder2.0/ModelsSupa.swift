@@ -11,11 +11,15 @@ struct Profile: Decodable {
   let username: String?
   let fullName: String?
   let website: String?
+  let bio: String?
+  let avatarUrl: String?
 
   enum CodingKeys: String, CodingKey {
     case username
     case fullName = "full_name"
     case website
+    case bio
+    case avatarUrl = "avatar_url"
   }
 }
 
@@ -23,11 +27,15 @@ struct UpdateProfileParams: Encodable {
   let username: String
   let fullName: String
   let website: String
+  let bio: String
+  let avatarUrl: String?
 
   enum CodingKeys: String, CodingKey {
     case username
     case fullName = "full_name"
     case website
+    case bio
+    case avatarUrl = "avatar_url"
   }
 }
 

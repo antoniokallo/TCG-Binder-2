@@ -102,6 +102,11 @@ struct ContentView: View {
                         showBinder = false
                     }
                 }
+                // When add tab is tapped, show add binder
+                if newValue == 2 {
+                    showingAddBinder = true
+                    selectedTab = 0 // Reset to home tab
+                }
             }
             
             // Friends Tab
@@ -115,7 +120,8 @@ struct ContentView: View {
             .badge(2) // Example badge for friend requests
             .tag(1)
             
-            // Hidden Add Tab (handled by floating button)
+            
+            // Hidden Add Tab (handled by tab bar button)
             Color.clear
                 .tabItem {
                     Image(systemName: "plus.circle")
@@ -151,33 +157,9 @@ struct ContentView: View {
         }
         .environment(\.navigationState, navigationState)
         .environmentObject(vm)
-        .overlay(
-            // Floating Add Button
-            VStack {
-                Spacer()
-                HStack {
-                    Spacer()
-                    
-                    // Center the button over the middle tab
-                    if navigationState.shouldShowTabBar {
-                        FloatingAddButton {
-                            navigationState.enterFullScreenMode()
-                            showingAddBinder = true
-                        }
-                    }
-                    
-                    Spacer()
-                }
-                .padding(.bottom, 25) // Position above tab bar
-            }
-            .transition(.scale.combined(with: .opacity))
-        )
         .sheet(isPresented: $showingAddBinder) {
             AddBinderView()
                 .environmentObject(vm)
-                .onDisappear {
-                    navigationState.exitFullScreenMode()
-                }
         }
         .preferredColorScheme(selectedColorScheme.colorScheme)
         .animation(.easeInOut(duration: 0.6), value: showBinder)
@@ -222,21 +204,6 @@ struct BinderMainView: View {
         ZStack {
             // Dynamic background based on selected binder color - zoom destination
             BinderDynamicBackground(binderColor: vm.selectedBinder.color)
-                .onAppear {
-                    Task {
-                        await vm.loadCardsIfNeeded()
-                    }
-                }
-                .onChange(of: vm.selectedTCG) { oldValue, newValue in
-                    Task {
-                        await vm.loadCardsIfNeeded()
-                    }
-                }
-                .onChange(of: vm.selectedUserBinder) { oldValue, newValue in
-                    Task {
-                        await vm.loadCardsIfNeeded()
-                    }
-                }
             
             // Content layer - uses standard SwiftUI layout
             VStack(spacing: 8) {
@@ -287,6 +254,21 @@ struct BinderMainView: View {
                     .padding(.trailing, 20)
                     .padding(.bottom, 30)
                 }
+            }
+        }
+        .onAppear {
+            Task {
+                await vm.loadCardsIfNeeded()
+            }
+        }
+        .onChange(of: vm.selectedTCG) { oldValue, newValue in
+            Task {
+                await vm.loadCardsIfNeeded()
+            }
+        }
+        .onChange(of: vm.selectedUserBinder) { oldValue, newValue in
+            Task {
+                await vm.loadCardsIfNeeded()
             }
         }
         .sheet(isPresented: $showAddCard) {
@@ -422,91 +404,64 @@ struct BinderMainView: View {
     }
 }
 
-// MARK: - Single Page View with Flip Animation
+// MARK: - Seamless Pagination Binder View
 
 struct BinderPageView: View {
     let set: TCGSet
     @EnvironmentObject var vm: BinderViewModel
-    @State private var dragOffset: CGSize = .zero
-    @State private var isFlipping = false
+    @State private var scrollOffset: CGFloat = 0
+    @State private var currentScrollIndex: Int = 0
 
     var pages: [[TCGCard]] { vm.pages(for: set) }
     var currentPageIndex: Int { vm.currentPageIndex(for: set.id) }
 
     var body: some View {
         GeometryReader { geometry in
-            let pageWidth = min(geometry.size.width - 40, 380)
-            let pageHeight = min(geometry.size.height - 20, pageWidth * 1.25)
+            let pageWidth = min(geometry.size.width - 20, 450)  // Reduced margins, increased max width
+            // Use almost all available height - minimal reserve for indicators
+            let availableHeight = geometry.size.height - 20  // Minimal space for dots
+            let pageHeight = availableHeight * 0.9  // Use 90% of available height
             
-            ZStack {
-                // Current page
-                if currentPageIndex < pages.count {
-                    BinderSinglePage(cards: pages[currentPageIndex])
-                        .frame(width: pageWidth, height: pageHeight)
-                        .rotation3DEffect(
-                            .degrees(Double(dragOffset.width / 10)),
-                            axis: (x: 0, y: 1, z: 0),
-                            anchor: dragOffset.width < 0 ? .leading : .trailing
-                        )
-                        .offset(x: isFlipping ? 0 : dragOffset.width / 2)
-                        .animation(.spring(response: 0.4, dampingFraction: 0.8), value: isFlipping)
+            VStack(spacing: 0) {
+                // Simple ScrollView with TabView for page-by-page scrolling
+                TabView(selection: $currentScrollIndex) {
+                    ForEach(Array(pages.enumerated()), id: \.offset) { pageIndex, pageCards in
+                        BinderSinglePage(cards: pageCards)
+                            .frame(width: pageWidth, height: pageHeight)
+                            .tag(pageIndex)
+                    }
+                }
+                .tabViewStyle(PageTabViewStyle(indexDisplayMode: .never))
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .onChange(of: currentScrollIndex) { oldValue, newValue in
+                    vm.setPageIndex(newValue, for: set.id)
                 }
                 
-                // Next page preview (when swiping left)
-                if dragOffset.width < -50 && currentPageIndex + 1 < pages.count {
-                    BinderSinglePage(cards: pages[currentPageIndex + 1])
-                        .frame(width: pageWidth, height: pageHeight)
-                        .rotation3DEffect(
-                            .degrees(Double(-90 + (dragOffset.width + 50) / 10)),
-                            axis: (x: 0, y: 1, z: 0),
-                            anchor: .leading
-                        )
-                        .opacity(0.7)
-                }
-                
-                // Previous page preview (when swiping right)
-                if dragOffset.width > 50 && currentPageIndex > 0 {
-                    BinderSinglePage(cards: pages[currentPageIndex - 1])
-                        .frame(width: pageWidth, height: pageHeight)
-                        .rotation3DEffect(
-                            .degrees(Double(90 - (dragOffset.width - 50) / 10)),
-                            axis: (x: 0, y: 1, z: 0),
-                            anchor: .trailing
-                        )
-                        .opacity(0.7)
-                }
-            }
-            .position(x: geometry.size.width / 2, y: geometry.size.height / 2)
-            .gesture(
-                DragGesture()
-                    .onChanged { value in
-                        if !isFlipping {
-                            dragOffset = value.translation
+                // Small page indicator circles at bottom
+                if pages.count > 1 {
+                    HStack(spacing: 4) {
+                        ForEach(0..<pages.count, id: \.self) { index in
+                            Circle()
+                                .fill(currentScrollIndex == index ? Color.cyan : Color.white.opacity(0.4))
+                                .frame(width: 4, height: 4)
+                                .shadow(color: currentScrollIndex == index ? .cyan : .clear, radius: 2)
+                                .scaleEffect(currentScrollIndex == index ? 1.3 : 1.0)
+                                .animation(.spring(response: 0.3, dampingFraction: 0.7), value: currentScrollIndex)
                         }
                     }
-                    .onEnded { value in
-                        handlePageFlip(translation: value.translation.width)
-                    }
-            )
-        }
-    }
-    
-    private func handlePageFlip(translation: CGFloat) {
-        isFlipping = true
-        
-        if translation < -100 && currentPageIndex + 1 < pages.count {
-            // Flip to next page
-            vm.setPageIndex(currentPageIndex + 1, for: set.id)
-        } else if translation > 100 && currentPageIndex > 0 {
-            // Flip to previous page
-            vm.setPageIndex(currentPageIndex - 1, for: set.id)
-        }
-        
-        // Reset drag offset with animation
-        dragOffset = .zero
-        
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
-            isFlipping = false
+                    .padding(.vertical, 6)
+                }
+            }
+            .onAppear {
+                // Initialize to current page index
+                currentScrollIndex = currentPageIndex
+            }
+            .onChange(of: currentPageIndex) { oldValue, newValue in
+                // When page changes programmatically, update TabView
+                if newValue != currentScrollIndex {
+                    currentScrollIndex = newValue
+                }
+            }
         }
     }
 }
@@ -515,33 +470,71 @@ struct BinderPageView: View {
 
 struct BinderSinglePage: View {
     let cards: [TCGCard]
-
+    @State private var glowIntensity: Double = 0.6
+    
     var body: some View {
         ZStack {
-            RoundedRectangle(cornerRadius: 20)
-                .fill(Color("BinderGreen").opacity(0.4))
-                .overlay(
-                    RoundedRectangle(cornerRadius: 20)
-                        .stroke(Color.black.opacity(0.1), lineWidth: 2)
+            // Futuristic background with gradient and glow effects
+            RoundedRectangle(cornerRadius: 24)
+                .fill(
+                    LinearGradient(
+                        colors: [
+                            Color.black.opacity(0.9),
+                            Color("BinderGreen").opacity(0.2),
+                            Color.black.opacity(0.8)
+                        ],
+                        startPoint: .topLeading,
+                        endPoint: .bottomTrailing
+                    )
                 )
-                .shadow(color: .black.opacity(0.15), radius: 8, x: 0, y: 4)
+                .overlay(
+                    RoundedRectangle(cornerRadius: 24)
+                        .fill(
+                            RadialGradient(
+                                colors: [
+                                    Color.cyan.opacity(glowIntensity * 0.3),
+                                    Color.purple.opacity(glowIntensity * 0.2),
+                                    Color.clear
+                                ],
+                                center: .center,
+                                startRadius: 20,
+                                endRadius: 200
+                            )
+                        )
+                        .animation(.easeInOut(duration: 2.0).repeatForever(autoreverses: true), value: glowIntensity)
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: 24)
+                        .stroke(
+                            LinearGradient(
+                                colors: [
+                                    Color.cyan.opacity(0.6),
+                                    Color.purple.opacity(0.4),
+                                    Color.cyan.opacity(0.6)
+                                ],
+                                startPoint: .topLeading,
+                                endPoint: .bottomTrailing
+                            ),
+                            lineWidth: 2
+                        )
+                )
+                .shadow(color: .cyan.opacity(0.3), radius: 20, x: 0, y: 0)
+                .shadow(color: .black.opacity(0.4), radius: 15, x: 0, y: 8)
             
-            VStack(spacing: 16) {
-                // Binder holes at top
-                HStack(spacing: 40) {
-                    ForEach(0..<3, id: \.self) { _ in
-                        Circle()
-                            .fill(Color.black.opacity(0.3))
-                            .frame(width: 12, height: 12)
-                    }
-                }
-                .padding(.top, 20)
+            VStack(spacing: 20) {
+                Spacer(minLength: 20)
                 
-                // Card grid
+                // Enhanced card grid (no entrance animation)
                 BinderPageGrid(cards: cards)
-                    .padding(.horizontal, 20)
+                    .padding(.horizontal, 24)
                 
-                Spacer(minLength: 10)
+                Spacer(minLength: 16)
+            }
+        }
+        .onAppear {
+            // Start glow animation
+            withAnimation(.easeInOut(duration: 2.0).repeatForever(autoreverses: true)) {
+                glowIntensity = 0.8
             }
         }
     }
@@ -573,15 +566,43 @@ struct CardSlot: View {
     let card: TCGCard
     @State private var showDetail = false
     @State private var pressed = false
+    @State private var showDeleteConfirmation = false
 
     var body: some View {
-        CardImageView(imageUrl: card.imageURL.absoluteString)
-            .overlay(
-                RoundedRectangle(cornerRadius: 8)
-                    .stroke(Color.black.opacity(0.15), lineWidth: 1)
-            )
-            .scaleEffect(pressed ? 0.98 : 1.0)
-            .animation(.spring(response: 0.25, dampingFraction: 0.7), value: pressed)
+        ZStack {
+            // Enhanced card display without shimmer
+            CardImageView(imageUrl: card.imageURL.absoluteString)
+                .clipShape(RoundedRectangle(cornerRadius: 12))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 12)
+                        .stroke(
+                            LinearGradient(
+                                colors: pressed ? [Color.cyan, Color.purple] : [Color.white.opacity(0.3), Color.white.opacity(0.1)],
+                                startPoint: .topLeading,
+                                endPoint: .bottomTrailing
+                            ),
+                            lineWidth: pressed ? 2 : 1
+                        )
+                        .animation(.spring(response: 0.3, dampingFraction: 0.8), value: pressed)
+                )
+                .shadow(color: pressed ? .cyan.opacity(0.6) : .black.opacity(0.2), radius: pressed ? 12 : 4, x: 0, y: pressed ? 6 : 2)
+            
+            // Rarity indicator glow
+            if let rarity = card.rarity, !rarity.isEmpty {
+                RoundedRectangle(cornerRadius: 12)
+                    .stroke(rarityColor(rarity), lineWidth: pressed ? 3 : 2)
+                    .opacity(pressed ? 0.8 : 0.5)
+                    .shadow(color: rarityColor(rarity), radius: pressed ? 8 : 4)
+                    .animation(.spring(response: 0.4, dampingFraction: 0.7), value: pressed)
+            }
+        }
+        .scaleEffect(pressed ? 0.95 : 1.0)
+        .rotation3DEffect(
+            .degrees(pressed ? 5 : 0),
+            axis: (x: 1, y: 1, z: 0),
+            perspective: 0.8
+        )
+        .animation(.spring(response: 0.4, dampingFraction: 0.8), value: pressed)
             .onLongPressGesture(minimumDuration: 0.15, pressing: { p in
                 pressed = p
             }, perform: {
@@ -590,18 +611,81 @@ struct CardSlot: View {
             .onTapGesture {
                 showDetail = true
             }
+            .contextMenu {
+                // Only show context menu if we're in a binder view
+                if vm.selectedUserBinder != nil {
+                    Button {
+                        showDeleteConfirmation = true
+                    } label: {
+                        Label("Remove from Binder", systemImage: "trash")
+                    }
+                }
+            }
             .sheet(isPresented: $showDetail) {
                 CardDetailView(card: card)
                     .environmentObject(vm)
             }
+            .alert("Remove Card", isPresented: $showDeleteConfirmation) {
+                Button("Cancel", role: .cancel) { }
+                Button("Remove", role: .destructive) {
+                    vm.removeCardFromCurrentBinder(card)
+                }
+            } message: {
+                Text("Are you sure you want to remove \"\(card.name)\" from this binder?")
+            }
+    }
+    
+    // Rarity color mapping
+    private func rarityColor(_ rarity: String) -> Color {
+        switch rarity.lowercased() {
+        case "common", "c": return .gray
+        case "uncommon", "u": return .green  
+        case "rare", "r": return .blue
+        case "super rare", "sr": return .purple
+        case "secret rare", "sec": return .red
+        case "leader", "l": return .orange
+        case "legendary", "legend": return .yellow
+        default: return .white
+        }
     }
 }
 
 struct EmptyCardSlot: View {
     var body: some View {
-        RoundedRectangle(cornerRadius: 8)
-            .fill(Color.white.opacity(0.35))
-            .overlay(RoundedRectangle(cornerRadius: 8).stroke(Color.black.opacity(0.08), lineWidth: 1))
+        RoundedRectangle(cornerRadius: 12)
+            .fill(
+                RadialGradient(
+                    colors: [
+                        Color.white.opacity(0.4),
+                        Color.gray.opacity(0.1),
+                        Color.black.opacity(0.05)
+                    ],
+                    center: .center,
+                    startRadius: 10,
+                    endRadius: 60
+                )
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 12)
+                    .stroke(
+                        LinearGradient(
+                            colors: [
+                                Color.white.opacity(0.4),
+                                Color.cyan.opacity(0.2),
+                                Color.white.opacity(0.4)
+                            ],
+                            startPoint: .topLeading,
+                            endPoint: .bottomTrailing
+                        ),
+                        lineWidth: 1.5
+                    )
+            )
+            .overlay(
+                // Plus icon for adding cards
+                Image(systemName: "plus.circle.fill")
+                    .font(.title2)
+                    .foregroundColor(.white.opacity(0.4))
+            )
             .aspectRatio(5.0/7.0, contentMode: .fit)
     }
 }
@@ -612,6 +696,10 @@ struct CardDetailView: View {
     @EnvironmentObject var vm: BinderViewModel
     @Environment(\.dismiss) private var dismiss
     let card: TCGCard
+    @State private var showDeleteConfirmation = false
+    @State private var userNotes: String = ""
+    @State private var isEditingNotes: Bool = false
+    @State private var isSavingNotes: Bool = false
 
     var body: some View {
         NavigationView {
@@ -721,11 +809,79 @@ struct CardDetailView: View {
                         }
                     }
                     
-                    // Delete Button (Only for Pokemon cards)
-                    if vm.selectedTCG == .pokemon {
+                    // Personal Notes Section - Only for binder cards
+                    if vm.selectedUserBinder != nil {
+                        VStack(alignment: .leading, spacing: 12) {
+                            HStack {
+                                Text("Personal Notes")
+                                    .font(.headline)
+                                
+                                Spacer()
+                                
+                                if !isEditingNotes {
+                                    Button("Edit") {
+                                        isEditingNotes = true
+                                    }
+                                    .font(.subheadline)
+                                    .foregroundStyle(.blue)
+                                }
+                            }
+                            
+                            if isEditingNotes {
+                                VStack(spacing: 12) {
+                                    TextEditor(text: $userNotes)
+                                        .frame(minHeight: 100)
+                                        .padding(8)
+                                        .background(Color(.systemGray6))
+                                        .clipShape(RoundedRectangle(cornerRadius: 8))
+                                    
+                                    HStack(spacing: 12) {
+                                        Button("Cancel") {
+                                            // Reload original notes
+                                            loadUserNotes()
+                                            isEditingNotes = false
+                                        }
+                                        .foregroundStyle(.secondary)
+                                        
+                                        Spacer()
+                                        
+                                        Button("Save") {
+                                            saveUserNotes()
+                                        }
+                                        .disabled(isSavingNotes)
+                                        .foregroundStyle(.white)
+                                        .padding(.horizontal, 16)
+                                        .padding(.vertical, 8)
+                                        .background(isSavingNotes ? Color.gray : Color.blue)
+                                        .clipShape(RoundedRectangle(cornerRadius: 8))
+                                    }
+                                }
+                            } else {
+                                if userNotes.isEmpty {
+                                    Text("Tap Edit to add your notes about this card...")
+                                        .foregroundStyle(.secondary)
+                                        .font(.body)
+                                        .padding()
+                                        .frame(maxWidth: .infinity, alignment: .leading)
+                                        .background(Color(.systemGray6))
+                                        .clipShape(RoundedRectangle(cornerRadius: 8))
+                                } else {
+                                    Text(userNotes)
+                                        .font(.body)
+                                        .padding()
+                                        .frame(maxWidth: .infinity, alignment: .leading)
+                                        .background(Color(.systemGray6))
+                                        .clipShape(RoundedRectangle(cornerRadius: 8))
+                                }
+                            }
+                        }
+                        .padding(.top, 8)
+                    }
+                    
+                    // Delete Button - Works for all TCG types when viewing binder cards
+                    if vm.selectedUserBinder != nil {
                         Button {
-                            vm.removePokemonCard(card)
-                            dismiss()
+                            showDeleteConfirmation = true
                         } label: {
                             HStack {
                                 Image(systemName: "trash")
@@ -748,6 +904,65 @@ struct CardDetailView: View {
                 ToolbarItem(placement: .navigationBarTrailing) {
                     DismissButton()
                 }
+            }
+            .onAppear {
+                // Load user notes when the view appears (only for binder cards)
+                if vm.selectedUserBinder != nil {
+                    loadUserNotes()
+                }
+            }
+        }
+        .alert("Remove Card", isPresented: $showDeleteConfirmation) {
+            Button("Cancel", role: .cancel) { }
+            Button("Remove", role: .destructive) {
+                vm.removeCardFromCurrentBinder(card)
+                dismiss()
+            }
+        } message: {
+            Text("Are you sure you want to remove \"\(card.name)\" from this binder?")
+        }
+    }
+    
+    // MARK: - Notes Helper Functions
+    
+    private func loadUserNotes() {
+        guard let selectedBinder = vm.selectedUserBinder,
+              let binderId = selectedBinder.id else {
+            return
+        }
+        
+        Task {
+            do {
+                let notes = try await vm.loadCardNotes(cardId: card.id, binderId: binderId)
+                await MainActor.run {
+                    userNotes = notes
+                }
+            } catch {
+                print("❌ Failed to load card notes: \(error)")
+            }
+        }
+    }
+    
+    private func saveUserNotes() {
+        guard let selectedBinder = vm.selectedUserBinder,
+              let binderId = selectedBinder.id else {
+            return
+        }
+        
+        isSavingNotes = true
+        
+        Task {
+            do {
+                try await vm.saveCardNotes(cardId: card.id, binderId: binderId, notes: userNotes)
+                await MainActor.run {
+                    isSavingNotes = false
+                    isEditingNotes = false
+                }
+            } catch {
+                await MainActor.run {
+                    isSavingNotes = false
+                }
+                print("❌ Failed to save card notes: \(error)")
             }
         }
     }
@@ -781,20 +996,17 @@ struct BinderDynamicBackground: View {
     @State private var backgroundOpacity: Double = 1.0  // Start visible for seamless transition
     
     var body: some View {
-        GeometryReader { geometry in
-            LinearGradient(
-                colors: [
-                    binderColor.opacity(0.8),
-                    binderColor.opacity(0.5),
-                    binderColor.opacity(0.3)
-                ],
-                startPoint: .topLeading,
-                endPoint: .bottomTrailing
-            )
-            .frame(width: geometry.size.width, height: geometry.size.height)
-            .ignoresSafeArea()
-            .opacity(backgroundOpacity)
-        }
+        LinearGradient(
+            colors: [
+                binderColor.opacity(0.8),
+                binderColor.opacity(0.5),
+                binderColor.opacity(0.3)
+            ],
+            startPoint: .topLeading,
+            endPoint: .bottomTrailing
+        )
+        .opacity(backgroundOpacity)
+        .ignoresSafeArea(.all) // This ensures it extends to all edges including safe areas
     }
 }
 
@@ -952,22 +1164,57 @@ struct MainProfileView: View {
     @EnvironmentObject var vm: BinderViewModel
     @AppStorage("selectedBackground") private var selectedBackground: BackgroundType = .potential
     @State private var showFullProfile = false
+    @State private var userProfile: Profile?
+    @State private var userEmail = ""
+    @StateObject private var profileService = ProfileService()
     
     var body: some View {
         NavigationView {
-            VStack(spacing: 24) {
+            ScrollView {
+                VStack(spacing: 24) {
                 // Profile Picture
-                Image(systemName: "person.crop.circle.fill")
-                    .font(.system(size: 100))
-                    .foregroundColor(.blue)
-                
-                VStack(spacing: 8) {
-                    Text("TCG Collector")
-                        .font(.title.weight(.bold))
+                VStack(spacing: 16) {
+                    if let avatarUrl = userProfile?.avatarUrl, !avatarUrl.isEmpty {
+                        AsyncImage(url: URL(string: avatarUrl)) { image in
+                            image
+                                .resizable()
+                                .aspectRatio(contentMode: .fill)
+                                .frame(width: 100, height: 100)
+                                .clipShape(Circle())
+                        } placeholder: {
+                            Circle()
+                                .fill(Color.blue.opacity(0.3))
+                                .frame(width: 100, height: 100)
+                                .overlay(
+                                    ProgressView()
+                                        .tint(.white)
+                                )
+                        }
+                    } else {
+                        Image(systemName: "person.crop.circle.fill")
+                            .font(.system(size: 100))
+                            .foregroundColor(.blue)
+                    }
                     
-                    Text("Total Binders: \(vm.userBinders.count)")
-                        .font(.subheadline)
-                        .foregroundColor(.secondary)
+                    VStack(spacing: 8) {
+                        Text(displayName)
+                            .font(.title.weight(.bold))
+                        
+                        if let bio = userProfile?.bio, !bio.isEmpty {
+                            Text(bio)
+                                .font(.subheadline)
+                                .foregroundColor(.secondary)
+                                .multilineTextAlignment(.center)
+                        }
+                        
+                        Text(userEmail)
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                        
+                        Text("Total Binders: \(vm.userBinders.count)")
+                            .font(.subheadline)
+                            .foregroundColor(.secondary)
+                    }
                 }
                 
                 // Current Binder Info
@@ -997,6 +1244,34 @@ struct MainProfileView: View {
                     .cornerRadius(12)
                 }
                 
+                // Mini Binders Collection
+                if !vm.userBinders.isEmpty {
+                    VStack(spacing: 12) {
+                        HStack {
+                            Text("My Binders")
+                                .font(.headline)
+                                .foregroundColor(.primary)
+                            Spacer()
+                        }
+                        
+                        ScrollView(.horizontal, showsIndicators: false) {
+                            HStack(spacing: 12) {
+                                ForEach(Array(vm.userBinders.enumerated()), id: \.offset) { index, binder in
+                                    MiniBinder(
+                                        userBinder: binder,
+                                        isSelected: vm.selectedUserBinder?.id == binder.id,
+                                        animationDelay: Double(index) * 0.1
+                                    )
+                                }
+                            }
+                            .padding(.horizontal, 4)
+                        }
+                    }
+                    .padding()
+                    .background(.ultraThinMaterial)
+                    .cornerRadius(12)
+                }
+                
                 // Stats
                 HStack(spacing: 40) {
                     StatView(title: "Cards", value: "\(vm.sets.flatMap { $0.cards }.count)")
@@ -1018,14 +1293,54 @@ struct MainProfileView: View {
                 .background(Color.blue)
                 .cornerRadius(12)
                 
-                Spacer()
+                }
+                .padding()
             }
-            .padding()
             .navigationTitle("Profile")
             .navigationBarTitleDisplayMode(.large)
         }
         .sheet(isPresented: $showFullProfile) {
             ProfileView(selectedBackground: selectedBackground)
+        }
+        .task {
+            await loadUserProfile()
+        }
+    }
+    
+    private var displayName: String {
+        if let profile = userProfile {
+            if let fullName = profile.fullName, !fullName.isEmpty {
+                return fullName
+            } else if let username = profile.username, !username.isEmpty {
+                return username
+            }
+        }
+        return "TCG Collector"
+    }
+    
+    private func loadUserProfile() async {
+        do {
+            let currentUser = try await supabase.auth.session.user
+            
+            await MainActor.run {
+                self.userEmail = currentUser.email ?? "No email"
+            }
+            
+            // Ensure profile exists
+            try await profileService.createProfileIfNeeded(
+                userId: currentUser.id.uuidString,
+                email: currentUser.email ?? ""
+            )
+            
+            // Load profile
+            let profile = try await profileService.loadProfile(userId: currentUser.id.uuidString)
+            
+            await MainActor.run {
+                self.userProfile = profile
+            }
+            
+        } catch {
+            debugPrint("Error loading profile in MainProfileView: \(error)")
         }
     }
 }
@@ -1047,6 +1362,126 @@ struct StatView: View {
     }
 }
 
+// MARK: - Mini Binder Component
+
+struct MiniBinder: View {
+    @EnvironmentObject var vm: BinderViewModel
+    let userBinder: UserBinder
+    let isSelected: Bool
+    let animationDelay: Double
+    @State private var isPressed = false
+    @State private var hasAppeared = false
+    
+    private var binderColor: Color {
+        return userBinder.color
+    }
+    
+    private var binderImageName: String {
+        let assignedValue = Int(userBinder.assigned_value)
+        let imageIndex = (assignedValue - 1) % 3
+        
+        switch imageIndex {
+        case 0: return "binder2"
+        case 1: return "binder3" 
+        case 2: return "binder2-black"
+        default: return "binder2"
+        }
+    }
+    
+    private var tcgImageName: String {
+        guard let game = userBinder.game else { return "tcg-binder-title" }
+        
+        switch game {
+        case "pokemon": return "pokemon"
+        case "yugioh": return "yugioh"
+        case "one_piece": return "logo_op"
+        default: return "tcg-binder-title"
+        }
+    }
+    
+    var body: some View {
+        VStack(spacing: 6) {
+            ZStack {
+                // Binder shadow
+                RoundedRectangle(cornerRadius: 8)
+                    .fill(Color.black.opacity(isSelected ? 0.15 : 0.08))
+                    .frame(width: 84, height: 105)
+                    .offset(x: 2, y: 3)
+                
+                // Binder base
+                RoundedRectangle(cornerRadius: 8)
+                    .fill(binderColor)
+                    .frame(width: 84, height: 105)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 8)
+                            .stroke(Color.black.opacity(0.1), lineWidth: 1)
+                    )
+                
+                // Binder image
+                Image(binderImageName)
+                    .resizable()
+                    .scaledToFit()
+                    .frame(width: 78, height: 99)
+                    .clipShape(RoundedRectangle(cornerRadius: 6))
+                
+                // TCG logo
+                VStack {
+                    HStack {
+                        Spacer()
+                        Image(tcgImageName)
+                            .resizable()
+                            .scaledToFit()
+                            .frame(width: 20, height: 13)
+                            .if(binderImageName == "binder2-black") { view in
+                                view
+                                    .background(Color.white.opacity(0.9))
+                                    .cornerRadius(3)
+                            }
+                            .padding(.top, 6)
+                            .padding(.trailing, 6)
+                    }
+                    Spacer()
+                }
+            }
+            .scaleEffect(hasAppeared ? (isPressed ? 0.95 : (isSelected ? 1.05 : 1.0)) : 0.3)
+            .opacity(hasAppeared ? 1.0 : 0.0)
+            .animation(.spring(response: 0.3, dampingFraction: 0.6), value: isPressed)
+            .animation(.spring(response: 0.4, dampingFraction: 0.7), value: isSelected)
+            .animation(.spring(response: 0.6, dampingFraction: 0.7), value: hasAppeared)
+            .onAppear {
+                DispatchQueue.main.asyncAfter(deadline: .now() + animationDelay) {
+                    withAnimation(.spring(response: 0.6, dampingFraction: 0.7)) {
+                        hasAppeared = true
+                    }
+                }
+            }
+            
+            // Binder name
+            Text(userBinder.name)
+                .font(.caption2)
+                .fontWeight(.medium)
+                .foregroundColor(.primary)
+                .lineLimit(1)
+                .frame(width: 84)
+        }
+        .onTapGesture {
+            // Quick press animation
+            withAnimation(.easeInOut(duration: 0.1)) {
+                isPressed = true
+            }
+            
+            // Select this binder
+            vm.selectUserBinder(userBinder)
+            
+            // Reset press animation
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                withAnimation(.easeInOut(duration: 0.1)) {
+                    isPressed = false
+                }
+            }
+        }
+    }
+}
 
 struct AddBinderView: View {
     @EnvironmentObject var vm: BinderViewModel

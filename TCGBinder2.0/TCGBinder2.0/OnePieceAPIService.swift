@@ -23,6 +23,7 @@ struct OnePieceCard: Codable, Identifiable {
     let dateScrapped: String?
     let cardImageId: String?
     let trigger: String?
+    let databaseUUID: String? // Store the actual database UUID
     
     enum CodingKeys: String, CodingKey {
         case cardName = "card_name"
@@ -44,6 +45,7 @@ struct OnePieceCard: Codable, Identifiable {
         case dateScrapped = "date_scraped"
         case cardImageId = "card_image_id"
         case trigger
+        case databaseUUID = "database_uuid"
     }
     
     // Identifiable requirement - use unique combination to handle parallel arts and different rarities
@@ -340,7 +342,8 @@ class OnePieceAPIService: ObservableObject, TCGAPIService {
             life: response.life != nil ? String(response.life!) : nil,  // Convert Int to String
             dateScrapped: response.date_scraped,
             cardImageId: response.card_image_id,
-            trigger: response.trigger
+            trigger: response.trigger,
+            databaseUUID: response.id  // Store the actual database UUID
         )
     }
 }

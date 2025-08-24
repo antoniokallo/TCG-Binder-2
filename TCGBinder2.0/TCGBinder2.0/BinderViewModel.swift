@@ -194,26 +194,47 @@ final class BinderViewModel: ObservableObject {
             trigger: onePieceCard.trigger
         )
         
-        sets[setIndex].cards.append(newCard)
-        
-        // Navigate to the page containing the new card
-        let cardIndex = sets[setIndex].cards.count - 1
-        let pageIndex = cardIndex / 9
-        setPageIndex(pageIndex, for: setID)
-        
-        // Save to binder-specific storage
+        // Check if we're working with a binder vs regular collection
         if let selectedBinder = selectedUserBinder, let binderId = selectedBinder.id {
+            // For binders: Don't add to local sets, only save to binder database
+            // Use the card's actual database UUID
+            let cardUUIDToUse = onePieceCard.databaseUUID ?? onePieceCard.id
+            print("🔍 DEBUG: Using database UUID: '\(cardUUIDToUse)' for binder: '\(binderId)'")
+            print("💾 DEBUG: Saving card name: '\(onePieceCard.cardName)', rarity: '\(onePieceCard.rarity ?? "nil")'")
+            print("💾 DEBUG: Card image: '\(onePieceCard.cardImage ?? "nil")'")
+            
             Task {
                 do {
-                    try await binderCardService.addCardToBinder(
+                    try await binderCardService.addCardToBinderWithUUID(
                         binderId: binderId,
-                        cardId: onePieceCard.cardSetId ?? onePieceCard.id ?? cardID,
+                        cardUUID: cardUUIDToUse,
                         cardType: selectedTCG
                     )
+                    print("✅ Successfully added card to binder!")
+                    
+                    // Refresh the binder to show the new card
+                    await MainActor.run {
+                        // Clear the session cache to force reload
+                        let sessionKey = "\(binderId)-\(selectedTCG.rawValue)"
+                        cardsLoadedThisSession[sessionKey] = false
+                    }
+                    
+                    // Force reload cards from binder to show the newly added card
+                    await loadCardsIfNeeded(forceRefresh: true)
+                    
                 } catch {
-                    print("⚠️ Failed to add card to binder: \(error)")
+                    print("❌ Failed to add card to binder: \(error)")
+                    print("❌ Error details: \(error.localizedDescription)")
                 }
             }
+        } else {
+            // For regular collection: Add to local sets array as before
+            sets[setIndex].cards.append(newCard)
+            
+            // Navigate to the page containing the new card
+            let cardIndex = sets[setIndex].cards.count - 1
+            let pageIndex = cardIndex / 9
+            setPageIndex(pageIndex, for: setID)
         }
         
         // Persist the changes
@@ -228,31 +249,58 @@ final class BinderViewModel: ObservableObject {
     
     // MARK: - Binder-Specific Card Loading
     
-    func loadCardsIfNeeded() async {
+    func loadCardsIfNeeded(forceRefresh: Bool = false) async {
         guard let selectedBinder = selectedUserBinder, let binderId = selectedBinder.id else {
             print("⚠️ No selected binder to load cards from")
             return
         }
+        
+        print("🔍 DEBUG: loadCardsIfNeeded called for binder: \(binderId)")
         
         // Check if we already have cards loaded for this binder (prevent duplicates)
         let hasCards = sets.first?.cards.contains { card in
             card.id.contains("-binder-") || cardCache[card.id] != nil
         } ?? false
         
-        // If we already loaded cards for this binder this session and they're still there, skip
+        // If we already loaded cards for this binder this session, skip
         let sessionKey = "\(binderId)-\(selectedTCG.rawValue)"
-        if hasCards && (cardsLoadedThisSession[sessionKey] ?? false) {
+        let alreadyLoaded = cardsLoadedThisSession[sessionKey] ?? false
+        
+        print("🔍 DEBUG: hasCards: \(hasCards), alreadyLoaded: \(alreadyLoaded), sessionKey: \(sessionKey), forceRefresh: \(forceRefresh)")
+        
+        // Skip loading if already loaded this session, unless we're forcing a refresh
+        if alreadyLoaded && !forceRefresh {
+            print("🚫 DEBUG: Skipping load - cards already loaded this session")
             return
         }
         
-        await loadCardsFromBinder(binderId: binderId)
+        // Skip if we already have cards loaded, unless we're forcing a refresh
+        if hasCards && !forceRefresh {
+            print("🚫 DEBUG: Skipping load - cards already present in UI")
+            return
+        }
+        
+        print("⬇️ DEBUG: Proceeding with card load")
+        // Set the flag BEFORE loading to prevent race conditions
         cardsLoadedThisSession[sessionKey] = true
+        await loadCardsFromBinder(binderId: binderId)
     }
     
     // Track if cards have been loaded this session (per binder + TCG combination)
     private var cardsLoadedThisSession: [String: Bool] = [:]
     
+    // MARK: - Session Management
+    
+    func clearSessionCache() {
+        cardsLoadedThisSession.removeAll()
+        print("🧹 Cleared session cache for card loading")
+    }
+    
+    @MainActor
     private func loadCardsFromBinder(binderId: String) async {
+        print("🔄 DEBUG: loadCardsFromBinder called for binderId: \(binderId)")
+        print("📍 DEBUG: Call stack trace")
+        
         do {
             // Clear existing cards to prevent duplicates
             clearCurrentBinderCards()
@@ -271,12 +319,19 @@ final class BinderViewModel: ObservableObject {
             // Get the actual card data from respective databases
             let cardDetails = try await binderCardService.getCardDetails(for: filteredCards, cardType: selectedTCG)
             
+            print("📤 DEBUG: Loaded card details from database:")
+            for (index, cardDetail) in cardDetails.enumerated() {
+                print("   Card \(index + 1): name='\(cardDetail.cardName)', rarity='\(cardDetail.rarity ?? "nil")'")
+                print("   Card \(index + 1): image='\(cardDetail.cardImage ?? "nil")'")
+                print("   Card \(index + 1): setId='\(cardDetail.setId ?? "nil")', cardSetId='\(cardDetail.cardSetId ?? "nil")'")
+            }
+            
             // Create a lookup dictionary for quantities
-            let quantityLookup = Dictionary(uniqueKeysWithValues: filteredCards.map { ($0.cardId, Int($0.qty) ?? 1) })
+            let quantityLookup = Dictionary(uniqueKeysWithValues: filteredCards.map { ($0.cardId, Int($0.qty)) })
             
             // Add cards to binder with proper quantities
             for cardDetail in cardDetails {
-                let cardId = cardDetail.cardSetId ?? cardDetail.id ?? "unknown"
+                let cardId = cardDetail.cardSetId ?? cardDetail.id
                 let quantity = quantityLookup[cardId] ?? 1
                 
                 // Add multiple copies based on quantity
@@ -290,11 +345,20 @@ final class BinderViewModel: ObservableObject {
             
             print("✅ Loaded \(cardDetails.count) card types with total copies from binder")
             
+            // Debug: Print final card count in sets
+            let totalCardsInSets = sets.flatMap { $0.cards }.count
+            print("🔢 DEBUG: Total cards now in sets array: \(totalCardsInSets)")
+            if let firstSet = sets.first {
+                print("🔢 DEBUG: Cards in first set: \(firstSet.cards.count)")
+                print("🔢 DEBUG: First few card names: \(firstSet.cards.prefix(3).map { $0.name })")
+            }
+            
         } catch {
             print("❌ Failed to load cards from binder: \(error)")
         }
     }
     
+    @MainActor
     private func clearCurrentBinderCards() {
         // Clear existing binder cards (those with "-binder-" in the ID)
         for setIndex in sets.indices {
@@ -542,7 +606,8 @@ final class BinderViewModel: ObservableObject {
             life: nil,
             dateScrapped: nil,
             cardImageId: pokemonCard.id,
-            trigger: nil
+            trigger: nil,
+            databaseUUID: pokemonCard.id  // Store the actual database UUID
         )
     }
     
@@ -726,10 +791,12 @@ final class BinderViewModel: ObservableObject {
             life: nil,
             dateScrapped: nil,
             cardImageId: yugiohCard.id ?? "unknown",
-            trigger: nil
+            trigger: nil,
+            databaseUUID: yugiohCard.id ?? "unknown"  // Store the actual database UUID
         )
     }
     
+    @MainActor
     private func addCardToSet(_ onePieceCard: OnePieceCard, setId: String, binderCardId: String) {
         guard let setIndex = sets.firstIndex(where: { $0.id == setId }) else {
             return
@@ -1178,7 +1245,22 @@ final class BinderViewModel: ObservableObject {
             selectedTCG = tcgType
         }
         
-        // Load cards for this binder
+        // Clear the old binder's cards from UI when switching binders
+        clearCurrentBinderCards()
+        
+        // Clear session cache when switching binders to ensure fresh loads
+        clearSessionCache()
+        
+        // Don't auto-load cards - only load when user explicitly opens the binder
+    }
+    
+    // MARK: - Open Binder (Explicit User Action)
+    
+    func openUserBinder(_ binder: UserBinder) {
+        // First select the binder
+        selectUserBinder(binder)
+        
+        // Then load cards for this specific binder
         Task {
             await loadCardsIfNeeded()
         }
@@ -1244,5 +1326,61 @@ final class BinderViewModel: ObservableObject {
         await loadUserBinders()
         
         print("✅ Deleted binder: \(selectedBinder.name)")
+    }
+    
+    // MARK: - Universal Binder Card Removal
+    
+    /// Remove a card from the current binder (works for all TCG types)
+    func removeCardFromCurrentBinder(_ card: TCGCard) {
+        guard let selectedBinder = selectedUserBinder else {
+            print("❌ No selected binder to remove card from")
+            return
+        }
+        
+        // Ensure the binder has a valid ID
+        guard let binderId = selectedBinder.id, !binderId.isEmpty else {
+            print("❌ Binder ID is nil or empty, cannot remove card")
+            return
+        }
+        
+        // Ensure the card has a valid ID
+        let cardId = card.id
+        guard !cardId.isEmpty else {
+            print("❌ Card ID is empty, cannot remove from binder")
+            return
+        }
+        
+        Task {
+            do {
+                try await binderCardService.removeCardFromBinder(
+                    binderId: binderId,
+                    cardId: cardId,
+                    cardType: selectedTCG
+                )
+                
+                // Refresh the binder to show updated cards
+                await MainActor.run {
+                    Task {
+                        await loadCardsIfNeeded(forceRefresh: true)
+                    }
+                }
+                
+            } catch {
+                print("❌ Failed to remove card from binder: \(error)")
+                // Could show an alert here in the future
+            }
+        }
+    }
+    
+    // MARK: - Card Notes Management
+    
+    /// Load user notes for a specific card in a binder
+    func loadCardNotes(cardId: String, binderId: String) async throws -> String {
+        return try await binderCardService.loadCardNotes(cardId: cardId, binderId: binderId)
+    }
+    
+    /// Save user notes for a specific card in a binder
+    func saveCardNotes(cardId: String, binderId: String, notes: String) async throws {
+        try await binderCardService.saveCardNotes(cardId: cardId, binderId: binderId, notes: notes)
     }
 }

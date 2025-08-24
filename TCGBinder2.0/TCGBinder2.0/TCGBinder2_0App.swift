@@ -36,18 +36,48 @@ struct TCGBinder2_0App: App {
 
 struct RootView: View {
   @State private var session: Session?
+  @State private var showLoadingTransition = false
+  @State private var showMainApp = false
 
   var body: some View {
     Group {
-      if session == nil { AuthView() } else { ContentView() }
+      if session == nil {
+        AuthView()
+      } else if showLoadingTransition {
+        LoadingTransitionView {
+          // Complete loading and show main app
+          withAnimation(.easeInOut(duration: 0.5)) {
+            showLoadingTransition = false
+            showMainApp = true
+          }
+        }
+      } else if showMainApp {
+        ContentView()
+      } else {
+        // This handles the initial session state
+        ContentView()
+      }
     }
     .task {
       for await (event, newSession) in await supabase.auth.authStateChanges {
         await MainActor.run {
           switch event {
-          case .signedIn:  self.session = newSession
-          case .signedOut: self.session = nil
-          default: break // ignore .initialSession to avoid auto-jump
+          case .signedIn:  
+            self.session = newSession
+            // Trigger loading transition for fresh sign-ins
+            if !showMainApp {
+              showLoadingTransition = true
+            }
+          case .signedOut: 
+            self.session = nil
+            showLoadingTransition = false
+            showMainApp = false
+          default: 
+            // Handle initial session - show main app directly without loading screen
+            if event == .initialSession && newSession != nil {
+              self.session = newSession
+              showMainApp = true
+            }
           }
         }
       }

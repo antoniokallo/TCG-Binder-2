@@ -193,7 +193,8 @@ class PokemonAPIService: ObservableObject, TCGAPIService {
             life: nil, // Pokemon doesn't use life
             dateScrapped: nil,
             cardImageId: pokemonCard.id,
-            trigger: nil // Pokemon doesn't use triggers
+            trigger: nil, // Pokemon doesn't use triggers
+            databaseUUID: pokemonCard.id  // Store the actual database UUID
         )
     }
     
@@ -519,7 +520,8 @@ class YuGiOhAPIService: ObservableObject, TCGAPIService {
             life: nil, // Yu-Gi-Oh doesn't use life
             dateScrapped: nil,
             cardImageId: yugiohCard.id ?? "unknown",
-            trigger: nil // Yu-Gi-Oh doesn't use triggers
+            trigger: nil, // Yu-Gi-Oh doesn't use triggers
+            databaseUUID: yugiohCard.id ?? "unknown"  // Store the actual database UUID
         )
     }
 }

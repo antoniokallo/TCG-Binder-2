@@ -13,6 +13,7 @@
 		56397D7F2E502D930022E1D1 /* Realtime in Frameworks */ = {isa = PBXBuildFile; productRef = 56397D7E2E502D930022E1D1 /* Realtime */; };
 		56397D812E502D930022E1D1 /* Storage in Frameworks */ = {isa = PBXBuildFile; productRef = 56397D802E502D930022E1D1 /* Storage */; };
 		56397D832E502D930022E1D1 /* Supabase in Frameworks */ = {isa = PBXBuildFile; productRef = 56397D822E502D930022E1D1 /* Supabase */; };
+		B39BF9BD2E5A6CFB008D571B /* Lottie in Frameworks */ = {isa = PBXBuildFile; productRef = B39BF9BC2E5A6CFB008D571B /* Lottie */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -62,6 +63,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				56397D7D2E502D930022E1D1 /* PostgREST in Frameworks */,
+				B39BF9BD2E5A6CFB008D571B /* Lottie in Frameworks */,
 				56397D7B2E502D930022E1D1 /* Functions in Frameworks */,
 				56397D832E502D930022E1D1 /* Supabase in Frameworks */,
 				56397D792E502D930022E1D1 /* Auth in Frameworks */,
@@ -133,6 +135,7 @@
 				56397D7E2E502D930022E1D1 /* Realtime */,
 				56397D802E502D930022E1D1 /* Storage */,
 				56397D822E502D930022E1D1 /* Supabase */,
+				B39BF9BC2E5A6CFB008D571B /* Lottie */,
 			);
 			productName = TCGBinder2.0;
 			productReference = B3A682E72E4F6E2800E314F8 /* TCGBinder2.0.app */;
@@ -218,6 +221,7 @@
 			minimizedProjectReferenceProxies = 1;
 			packageReferences = (
 				56397D772E502D930022E1D1 /* XCRemoteSwiftPackageReference "supabase-swift" */,
+				B39BF9BB2E5A6CFB008D571B /* XCRemoteSwiftPackageReference "lottie-spm" */,
 			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = B3A682E82E4F6E2800E314F8 /* Products */;
@@ -594,6 +598,14 @@
 				minimumVersion = 2.5.1;
 			};
 		};
+		B39BF9BB2E5A6CFB008D571B /* XCRemoteSwiftPackageReference "lottie-spm" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/airbnb/lottie-spm";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 4.5.2;
+			};
+		};
 /* End XCRemoteSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
@@ -626,6 +638,11 @@
 			isa = XCSwiftPackageProductDependency;
 			package = 56397D772E502D930022E1D1 /* XCRemoteSwiftPackageReference "supabase-swift" */;
 			productName = Supabase;
+		};
+		B39BF9BC2E5A6CFB008D571B /* Lottie */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = B39BF9BB2E5A6CFB008D571B /* XCRemoteSwiftPackageReference "lottie-spm" */;
+			productName = Lottie;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};

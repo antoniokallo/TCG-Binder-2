@@ -35,8 +35,11 @@ struct LandingView: View {
     let binderTransition: Namespace.ID
     @State private var binderScale: CGFloat = 1.0
     @State private var titleOpacity: Double = 0.0
+    @State private var titleScale: CGFloat = 0.8
     @State private var subtitleOpacity: Double = 0.0
     @State private var isTransitioning: Bool = false
+    @State private var bindersVisible: Bool = false // Control binder visibility for entrance
+    @State private var contentTopOffset: CGFloat = 100 // Start below, slide up to final position
     
     var body: some View {
         ZStack {
@@ -51,37 +54,55 @@ struct LandingView: View {
                     .resizable()
                     .scaledToFit()
                     .frame(maxHeight: 150)
+                    .scaleEffect(titleScale)
                     .opacity(isTransitioning ? 0.0 : titleOpacity)
                     .animation(.easeOut(duration: 0.3), value: isTransitioning)
+                    .animation(.spring(response: 0.8, dampingFraction: 0.6), value: titleScale)
                     .onLongPressGesture(minimumDuration: 3.0) {
                         // Hidden developer feature: long press title to clear all data
                         vm.clearAllData()
                     }
                 
-                // Binder Carousel
-                BinderCarouselView(
-                    showBinder: $showBinder,
-                    binderTransition: binderTransition,
-                    isTransitioning: $isTransitioning,
-                    onExpansionTrigger: { color in
-                        triggerExpansionAnimation(color: color)
-                    }
-                )
-                .scaleEffect(binderScale)
-                .animation(.spring(response: 0.5, dampingFraction: 0.7), value: binderScale)
+                // Binder Carousel - only show when ready for entrance
+                if bindersVisible {
+                    BinderCarouselView(
+                        showBinder: $showBinder,
+                        binderTransition: binderTransition,
+                        isTransitioning: $isTransitioning,
+                        onExpansionTrigger: { color in
+                            triggerExpansionAnimation(color: color)
+                        }
+                    )
+                    .scaleEffect(binderScale)
+                    .animation(.spring(response: 0.5, dampingFraction: 0.7), value: binderScale)
+                }
                 
                 
             }
-            .padding(.top, -50)
+            .offset(y: contentTopOffset)
+            .animation(.spring(response: 0.8, dampingFraction: 0.7), value: contentTopOffset)
         }
         .onAppear {
-            // Animate title appearance
+            // Animate title appearance with bounce
             withAnimation(.easeOut(duration: 0.8).delay(0.3)) {
                 titleOpacity = 1.0
+            }
+            withAnimation(.spring(response: 0.8, dampingFraction: 0.6, blendDuration: 0).delay(0.3)) {
+                titleScale = 1.0
             }
             
             withAnimation(.easeOut(duration: 0.6).delay(0.6)) {
                 subtitleOpacity = 1.0
+            }
+            
+            // Smoothly slide content from below to final position after title appears  
+            withAnimation(.spring(response: 0.8, dampingFraction: 0.7).delay(0.8)) {
+                contentTopOffset = -50
+            }
+            
+            // Show binders after slide animation completes
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) {
+                bindersVisible = true
             }
         }
     }
@@ -406,41 +427,25 @@ struct BinderCarouselView: View {
                 Spacer()
                 ZStack {
                     ForEach(Array(binders.enumerated()), id: \.offset) { index, userBinder in
+                        let isBinderSelected = vm.selectedUserBinder?.id == userBinder.id
+                        let isBinderTransforming = isTransforming && isBinderSelected
+                        let binderEntranceDelay = Double(index) * 0.2
+                        
                         BinderCard(
                             userBinder: userBinder,
-                            isSelected: vm.selectedUserBinder?.id == userBinder.id,
-                            isTransforming: isTransforming && vm.selectedUserBinder?.id == userBinder.id,
+                            isSelected: isBinderSelected,
+                            isTransforming: isBinderTransforming,
                             binderTransition: binderTransition,
-                            onClick: {
-                                if vm.selectedUserBinder?.id == userBinder.id {
-                                    // If already selected, start transformation with automatic navigation
-                                    isTransforming = true
-                                    isTransitioning = true
-                                    onExpansionTrigger(Color.black) // Use black as default color
-                                    
-                                    // Trigger navigation change immediately for automatic transition
-                                    withAnimation(.easeInOut(duration: 0.6)) {
-                                        showBinder = true
-                                    }
-                                    
-                                    // Reset states after transition
-                                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) {
-                                        isTransforming = false
-                                        isTransitioning = false
-                                    }
-                                } else {
-                                    // If not selected, switch to this binder (circular navigation)
-                                    withAnimation(.spring(response: 0.5, dampingFraction: 0.8)) {
-                                        vm.selectUserBinder(userBinder)
-                                        currentIndex = index
-                                    }
-                                }
-                            }
+                            onClick: { handleBinderCardTap(userBinder: userBinder, index: index) },
+                            entranceDelay: binderEntranceDelay
                         )
-                        .scaleEffect(scaleForBinder(at: index))
-                        .opacity(opacityForBinder(at: index))
-                        .offset(x: offsetForBinder(at: index), y: yOffsetForBinder(at: index))
-                        .zIndex(zIndexForBinder(at: index))
+                        .modifier(BinderCardLayoutModifier(
+                            scale: scaleForBinder(at: index),
+                            opacity: opacityForBinder(at: index),
+                            offsetX: offsetForBinder(at: index),
+                            offsetY: yOffsetForBinder(at: index),
+                            zIndex: zIndexForBinder(at: index)
+                        ))
                         .animation(.spring(response: 0.6, dampingFraction: 0.8), value: vm.selectedBinder)
                     }
                 }
@@ -461,16 +466,16 @@ struct BinderCarouselView: View {
                         let shouldMoveRight = value.translation.width > threshold || velocity > 100
                         
                         if shouldMoveRight && !binders.isEmpty {
-                            // Swipe right - go to previous binder (circular)
+                            // Swipe right - go to previous binder (circular) - NO preloading
                             withAnimation(.spring(response: 0.5, dampingFraction: 0.8)) {
                                 currentIndex = (currentIndex - 1 + binders.count) % binders.count
-                                vm.selectUserBinder(binders[currentIndex])
+                                vm.selectUserBinder(binders[currentIndex]) // Just visual selection, no card loading
                             }
                         } else if shouldMoveLeft && !binders.isEmpty {
-                            // Swipe left - go to next binder (circular)
+                            // Swipe left - go to next binder (circular) - NO preloading
                             withAnimation(.spring(response: 0.5, dampingFraction: 0.8)) {
                                 currentIndex = (currentIndex + 1) % binders.count
-                                vm.selectUserBinder(binders[currentIndex])
+                                vm.selectUserBinder(binders[currentIndex]) // Just visual selection, no card loading
                             }
                         }
                         
@@ -580,6 +585,53 @@ struct BinderCarouselView: View {
         // Front binder has highest z-index, decreasing as we go back
         return Double(binders.count - abs(relativeIndex))
     }
+    
+    // Extract complex onClick logic to avoid compiler type-checking issues
+    private func handleBinderCardTap(userBinder: UserBinder, index: Int) {
+        if vm.selectedUserBinder?.id == userBinder.id {
+            // User explicitly tapped to open this binder - load cards now!
+            vm.openUserBinder(userBinder)
+            
+            // Start transformation with automatic navigation
+            isTransforming = true
+            isTransitioning = true
+            onExpansionTrigger(Color.black) // Use black as default color
+            
+            // Trigger navigation change immediately for automatic transition
+            withAnimation(.easeInOut(duration: 0.6)) {
+                showBinder = true
+            }
+            
+            // Reset states after transition
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) {
+                isTransforming = false
+                isTransitioning = false
+            }
+        } else {
+            // If not selected, just switch visually - NO preloading!
+            withAnimation(.spring(response: 0.5, dampingFraction: 0.8)) {
+                vm.selectUserBinder(userBinder)
+                currentIndex = index
+            }
+        }
+    }
+}
+
+// Custom ViewModifier to simplify complex modifier chains
+struct BinderCardLayoutModifier: ViewModifier {
+    let scale: CGFloat
+    let opacity: Double
+    let offsetX: CGFloat
+    let offsetY: CGFloat
+    let zIndex: Double
+    
+    func body(content: Content) -> some View {
+        content
+            .scaleEffect(scale)
+            .opacity(opacity)
+            .offset(x: offsetX, y: offsetY)
+            .zIndex(zIndex)
+    }
 }
 
 struct BinderCard: View {
@@ -588,9 +640,14 @@ struct BinderCard: View {
     let isTransforming: Bool
     let binderTransition: Namespace.ID
     let onClick: () -> Void
+    let entranceDelay: Double // Add entrance delay parameter
     
     @State private var isPressed: Bool = false
     @State private var selectionScale: CGFloat = 1.0
+    // Entrance animation states
+    @State private var entranceScale: CGFloat = 0.3
+    @State private var entranceOpacity: Double = 0.0
+    @State private var entranceOffset: CGFloat = 100
     
     // Helper computed properties
     private var binderColor: Color {
@@ -607,6 +664,21 @@ struct BinderCard: View {
         case 1: return "binder3"
         case 2: return "binder2-black"
         default: return "binder2"
+        }
+    }
+    
+    private var tcgImageName: String {
+        guard let game = userBinder.game else { return "tcg-binder-title" }
+        
+        switch game {
+        case "pokemon":
+            return "pokemon"
+        case "yugioh":
+            return "yugioh"
+        case "one_piece":
+            return "logo_op"
+        default:
+            return "tcg-binder-title"
         }
     }
     
@@ -637,6 +709,25 @@ struct BinderCard: View {
                 .frame(width: 260, height: 330)
                 .clipShape(RoundedRectangle(cornerRadius: 16))
             
+            // TCG Logo at the top
+            VStack {
+                HStack {
+                    Spacer()
+                    Image(tcgImageName)
+                        .resizable()
+                        .scaledToFit()
+                        .frame(width: 60, height: 40)
+                        .if(binderImageName == "binder2-black") { view in
+                            view
+                                .background(Color.white.opacity(0.9))
+                                .cornerRadius(8)
+                        }
+                        .padding(.top, 16)
+                        .padding(.trailing, 16)
+                }
+                Spacer()
+            }
+            
             // Binder Name Label
             VStack {
                 Spacer()
@@ -650,9 +741,26 @@ struct BinderCard: View {
                     .padding(.bottom, 20)
             }
         }
-        .scaleEffect(isPressed ? 1.1 : (isSelected ? selectionScale : 1.0))
+        // Apply entrance animations
+        .scaleEffect(entranceScale * (isPressed ? 1.1 : (isSelected ? selectionScale : 1.0)))
+        .opacity(entranceOpacity)
+        .offset(y: entranceOffset)
         .animation(.spring(response: 0.3, dampingFraction: 0.6), value: isPressed)
         .animation(.spring(response: 0.4, dampingFraction: 0.7), value: selectionScale)
+        // Entrance animation with bouncy spring
+        .animation(.spring(response: 0.8, dampingFraction: 0.6, blendDuration: 0), value: entranceScale)
+        .animation(.spring(response: 0.8, dampingFraction: 0.6, blendDuration: 0), value: entranceOpacity)
+        .animation(.spring(response: 0.8, dampingFraction: 0.6, blendDuration: 0), value: entranceOffset)
+        .onAppear {
+            // Trigger bouncy entrance with delay
+            DispatchQueue.main.asyncAfter(deadline: .now() + entranceDelay) {
+                withAnimation(.spring(response: 0.8, dampingFraction: 0.6, blendDuration: 0)) {
+                    entranceScale = 1.0
+                    entranceOpacity = 1.0
+                    entranceOffset = 0
+                }
+            }
+        }
         .onTapGesture {
             // Quick press animation
             withAnimation(.easeInOut(duration: 0.1)) {
