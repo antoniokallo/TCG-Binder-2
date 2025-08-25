@@ -189,3 +189,74 @@ struct UpdateUserBinderCardQtyParams: Encodable {
     case qty
   }
 }
+
+// MARK: - Friend Request Models
+
+struct FriendRequest: Codable, Identifiable {
+    let id: String?
+    let requesterId: String
+    let addresseeId: String
+    let status: String
+    let createdAt: String?
+    
+    enum CodingKeys: String, CodingKey {
+        case id
+        case requesterId = "requester_id"
+        case addresseeId = "addressee_id"
+        case status
+        case createdAt = "created_at"
+    }
+}
+
+struct CreateFriendRequestParams: Encodable {
+    let requesterId: String
+    let addresseeId: String
+    let status: String
+    
+    enum CodingKeys: String, CodingKey {
+        case requesterId = "requester_id"
+        case addresseeId = "addressee_id"
+        case status
+    }
+}
+
+struct UpdateFriendRequestParams: Encodable {
+    let status: String
+    
+    enum CodingKeys: String, CodingKey {
+        case status
+    }
+}
+
+// MARK: - Friend and User Search Models
+
+struct UserSearchResult: Codable, Identifiable {
+    let id: String
+    let username: String?
+    let fullName: String?
+    let bio: String?
+    let avatarUrl: String?
+    
+    enum CodingKeys: String, CodingKey {
+        case id
+        case username
+        case fullName = "full_name"
+        case bio
+        case avatarUrl = "avatar_url"
+    }
+}
+
+// Friend request status types
+enum FriendRequestStatus: String, CaseIterable {
+    case pending = "pending"
+    case accepted = "accepted"
+    case declined = "declined"
+    
+    var displayName: String {
+        switch self {
+        case .pending: return "Pending"
+        case .accepted: return "Friends"
+        case .declined: return "Declined"
+        }
+    }
+}

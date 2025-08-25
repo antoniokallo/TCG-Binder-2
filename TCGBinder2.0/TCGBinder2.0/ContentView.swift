@@ -58,9 +58,11 @@ struct CardImageView: View {
 struct ContentView: View {
     @StateObject private var vm = BinderViewModel()
     @StateObject private var navigationState = NavigationStateManager()
+    @StateObject private var friendService = FriendService()
     @State private var selectedTab = 0
     @State private var showingAddBinder = false
     @State private var showBinder = false
+    @State private var friendRequestCount = 0
     @AppStorage("selectedBackground") private var selectedBackground: BackgroundType = .potential
     @AppStorage("appColorScheme") private var selectedColorScheme: AppColorScheme = .system
     @Namespace private var binderTransition
@@ -117,7 +119,7 @@ struct ContentView: View {
                 Image(systemName: "person.2")
                 Text("Friends")
             }
-            .badge(2) // Example badge for friend requests
+            .badge(friendRequestCount)
             .tag(1)
             
             
@@ -154,6 +156,17 @@ struct ContentView: View {
         .opacity(navigationState.shouldShowTabBar ? 1 : 0)
         .onAppear {
             setupTabBarAppearance()
+            Task {
+                await loadFriendRequestCount()
+            }
+        }
+        .onChange(of: selectedTab) { oldValue, newValue in
+            // Refresh friend request count when switching to or from friends tab
+            if newValue == 1 || oldValue == 1 {
+                Task {
+                    await loadFriendRequestCount()
+                }
+            }
         }
         .environment(\.navigationState, navigationState)
         .environmentObject(vm)
@@ -186,6 +199,22 @@ struct ContentView: View {
         
         UITabBar.appearance().standardAppearance = appearance
         UITabBar.appearance().scrollEdgeAppearance = appearance
+    }
+    
+    private func loadFriendRequestCount() async {
+        do {
+            let currentUser = try await supabase.auth.session.user
+            let requests = try await friendService.getFriendRequestsReceived(for: currentUser.id.uuidString)
+            
+            await MainActor.run {
+                self.friendRequestCount = requests.count
+            }
+        } catch {
+            debugPrint("Error loading friend request count: \(error)")
+            await MainActor.run {
+                self.friendRequestCount = 0
+            }
+        }
     }
 }
 
@@ -1122,41 +1151,6 @@ struct FloatingAddButton: View {
             }
         }
         .buttonStyle(PlainButtonStyle())
-    }
-}
-
-struct FriendsView: View {
-    var body: some View {
-        NavigationView {
-            VStack(spacing: 20) {
-                Image(systemName: "person.2.circle")
-                    .font(.system(size: 80))
-                    .foregroundColor(.secondary)
-                
-                Text("Friends")
-                    .font(.largeTitle.weight(.bold))
-                
-                Text("Connect with other collectors")
-                    .font(.body)
-                    .foregroundColor(.secondary)
-                    .multilineTextAlignment(.center)
-                
-                // Example badge functionality
-                HStack {
-                    Image(systemName: "bell.badge")
-                        .foregroundColor(.red)
-                    Text("2 new friend requests")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
-                }
-                .padding()
-                .background(.ultraThinMaterial)
-                .cornerRadius(12)
-            }
-            .padding()
-            .navigationTitle("Friends")
-            .navigationBarTitleDisplayMode(.large)
-        }
     }
 }
 
